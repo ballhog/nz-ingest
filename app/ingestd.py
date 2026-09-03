@@ -1284,7 +1284,7 @@ async function home(){
   const sig=JSON.stringify([d.manifest,d.hashed,d.damaged,d.unreadable,
     d.waiting,d.readonly,j.running,j.phase,j.note,
     (d.batches||[]).map(b=>[b.id,b.state,b.note])]);
-  if(homeDrawn&&sig===homeSig&&!j.running) return;
+  if(homeDrawn&&sig===homeSig&&(!j.running||document.getElementById('phase'))) return;
   homeSig=sig; homeDrawn=true;
   let h='';
   h+=`<div class=mods>
