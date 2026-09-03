@@ -38,6 +38,7 @@ CLI
   ingestd.py --plan PATH           scan a folder, print the plan, exit
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -57,6 +58,20 @@ DB = os.environ.get('NZ_DB', '/data/ingest.db')
 PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
+
+VERSION = '1.6.8'
+# Where the update button pulls from - a raw-file base URL, e.g.
+#   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
+# Left empty the panel simply reports that no source is configured. Nothing
+# is ever fetched unless you press the button.
+UPDATE_BASE = os.environ.get('NZ_UPDATE_BASE', '').rstrip('/')
+# Optional token for a PRIVATE repo. raw.githubusercontent.com will not serve
+# private content at all, so when a token is present the raw URL is rewritten
+# to GitHub's contents API, which does. A fine-grained token with read-only
+# "Contents" on this one repo is all that is needed.
+UPDATE_TOKEN = os.environ.get('NZ_UPDATE_TOKEN', '').strip()
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+CODE_FILES = ('ingestd.py', 'mediacheck.py', 'store.py')
 
 # Top-level names skipped when walking the ARCHIVE root: the app's own parked
 # trees, its database, and any other application's storage that happens to
@@ -123,10 +138,76 @@ progress = {'batch': None, 'done': 0, 'total': 0, 'phase': ''}
 # what three lost scans on 2026-09-02 argued for.
 JOB = {'running': False, 'phase': 'idle', 'root': '', 'hash': False,
        'done': 0, 'skipped': 0, 'total': 0, 'started': 0, 'rate': 0.0,
-       'note': ''}
+       'note': '', 'file': '', 'cpu': 0.0, 'mem_mb': 0, 'io_mb': 0.0}
 JOB_STATE = os.path.join(os.path.dirname(os.path.abspath(DB)),
                          'baseline.state')
 _stop = threading.Event()
+
+# System stats sampling for the status panel.
+_last_stat = None
+def sample_stats():
+    """CPU %, memory (MB), disk I/O (MB/s). Pure /proc parsing, no psutil."""
+    global _last_stat
+    stats = {'cpu': 0.0, 'mem_mb': 0, 'io_mb': 0.0}
+    try:
+        # CPU: /proc/self/stat gives utime+stime in ticks. To get %, we need
+        # to track the delta and divide by elapsed wall time.
+        with open('/proc/self/stat') as f:
+            parts = f.read().split()
+            utime, stime = int(parts[13]), int(parts[14])
+            cpu_ticks = utime + stime
+        now = time.time()
+        if _last_stat and _last_stat.get('cpu_ticks') is not None:
+            delta_ticks = cpu_ticks - _last_stat['cpu_ticks']
+            elapsed = now - _last_stat['time']
+            if elapsed > 0:
+                # Assume 100 ticks/sec (typical on Linux); compare to 1 core
+                # at 100%. Divide by elapsed to get utilization percentage.
+                cpu_pct = (delta_ticks / 100.0) / elapsed * 100.0
+                stats['cpu'] = round(min(100.0, cpu_pct), 1)
+        if _last_stat is None:
+            _last_stat = {}
+        _last_stat['cpu_ticks'] = cpu_ticks
+        _last_stat['time'] = now
+    except:
+        pass
+    try:
+        # Memory: /proc/self/status has VmRSS
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    kb = int(line.split()[1])
+                    stats['mem_mb'] = kb // 1024
+                    break
+    except:
+        pass
+    try:
+        # Disk I/O: sample /proc/diskstats for read+write bytes.
+        # This is a simple cumulative counter; calculate delta over time.
+        with open('/proc/diskstats') as f:
+            io_bytes = 0
+            for line in f:
+                # Only count the main data partition (usually sda or similar).
+                # Format: major minor name reads_completed reads_merged reads_sectors
+                #         reads_time writes_completed writes_merged writes_sectors...
+                parts = line.split()
+                if len(parts) >= 10 and parts[2] in ('sda', 'sdb', 'nvme0n1'):
+                    # Sectors are 512 bytes each; sum reads + writes
+                    reads = int(parts[5])  # read sectors
+                    writes = int(parts[9])  # write sectors
+                    io_bytes += (reads + writes) * 512
+            if _last_stat and _last_stat.get('io_bytes') is not None:
+                delta = max(0, io_bytes - _last_stat['io_bytes'])
+                elapsed = time.time() - _last_stat['time']
+                if elapsed > 0:
+                    stats['io_mb'] = round(delta / (1024*1024*elapsed), 1)
+        # Update shared state (don't overwrite, merge)
+        if _last_stat is None:
+            _last_stat = {}
+        _last_stat['io_bytes'] = io_bytes
+    except:
+        pass
+    return stats
 
 
 def job_save():
@@ -178,6 +259,8 @@ def run_baseline(root, want_hash=False, resume=True):
             if _stop.is_set():
                 JOB['note'] = 'stopped at %d of %d' % (JOB['done'], JOB['total'])
                 break
+            # Track current file for the status readout panel.
+            JOB['file'] = os.path.basename(p)
             rel = rel_to_archive(p)
             if rel in known:
                 try:
@@ -193,11 +276,18 @@ def run_baseline(root, want_hash=False, resume=True):
             store.add_file(rel, r)
             n += 1
             JOB['done'] += 1
+            # Sample system stats and commit every 500 files.
             if n % 500 == 0:
                 store.commit()
                 el = time.time() - t0
                 JOB['rate'] = n / el if el else 0.0
+                # Sample CPU, memory, disk I/O for the UI.
+                s = sample_stats()
+                JOB.update(s)
         store.commit()
+        # Final stats.
+        s = sample_stats()
+        JOB.update(s)
         if not _stop.is_set():
             JOB['note'] = ('%d files, %d inspected, %d unchanged'
                            % (JOB['total'], n, JOB['skipped']))
@@ -213,6 +303,220 @@ def job_start(root=None, want_hash=False, resume=True):
                          daemon=True)
     t.start()
     return t
+
+
+# ----------------------------------------------------------------- firmware
+
+def fw_local():
+    """Short hash and size of each running source file."""
+    out = {}
+    for f in CODE_FILES:
+        try:
+            b = open(os.path.join(CODE_DIR, f), 'rb').read()
+            out[f] = {'bytes': len(b),
+                      'sha': hashlib.sha256(b).hexdigest()[:12]}
+        except OSError:
+            out[f] = {'bytes': 0, 'sha': '-'}
+    return out
+
+
+def _peek(b, n=60):
+    """First few bytes as printable text, for error messages. Knowing what
+    actually came back is the difference between a five-second fix and an
+    hour of guessing."""
+    try:
+        t = b[:n].decode('utf-8', 'replace')
+    except Exception:                                       # noqa: BLE001
+        t = repr(b[:n])
+    return t.replace('\n', ' ').replace('\r', ' ').strip() or '(empty)'
+
+
+def fw_url(fname):
+    """Resolve one file's URL, switching to the API form for private repos.
+
+    raw.githubusercontent.com/OWNER/REPO/BRANCH/app/x.py
+      -> api.github.com/repos/OWNER/REPO/contents/app/x.py?ref=BRANCH
+    """
+    base = '%s/%s' % (UPDATE_BASE, fname)
+    if not UPDATE_TOKEN or 'raw.githubusercontent.com' not in base:
+        return base
+    tail = base.split('raw.githubusercontent.com/', 1)[1]
+    bits = tail.split('/')
+    if len(bits) < 4:
+        return base
+    owner, repo, branch = bits[0], bits[1], bits[2]
+    path = '/'.join(bits[3:])
+    return ('https://api.github.com/repos/%s/%s/contents/%s?ref=%s'
+            % (owner, repo, path, branch))
+
+
+def fw_repo():
+    """(owner, repo, branch, subpath) from a raw.githubusercontent base, or
+    None when the source is not GitHub."""
+    parts = UPDATE_BASE.split('raw.githubusercontent.com/', 1)
+    if len(parts) < 2:
+        return None
+    tail = parts[1]
+    bits = [b for b in tail.split('/') if b]
+    if len(bits) < 3:
+        return None
+    return (bits[0], bits[1], bits[2], '/'.join(bits[3:]))
+
+
+def fw_commits():
+    """Last commit per file: short sha, subject, date.
+
+    Decoration, not function. It must NEVER raise: an update that works is
+    worth more than knowing which commit it came from, and an early version
+    of this let a metadata failure block the install entirely.
+    """
+    try:
+        return _fw_commits()
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def _fw_commits():
+    info = {}
+    r = fw_repo()
+    if not r:
+        return info
+    import urllib.request
+    import urllib.error
+    owner, repo, branch, sub = r
+    for f in CODE_FILES:
+        path = ('%s/%s' % (sub, f)) if sub else f
+        url = ('https://api.github.com/repos/%s/%s/commits'
+               '?path=%s&sha=%s&per_page=1' % (owner, repo, path, branch))
+        try:
+            req = urllib.request.Request(url, headers=fw_headers())
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            if not data:
+                continue
+            c = data[0]
+            msg = (c.get('commit', {}).get('message') or '').split('\n')[0]
+            info[f] = {
+                'rev': (c.get('sha') or '')[:7],
+                'msg': msg[:90],
+                'when': (c.get('commit', {}).get('committer', {})
+                         .get('date') or ''),
+                'who': (c.get('commit', {}).get('author', {})
+                        .get('name') or ''),
+            }
+        except Exception:                                   # noqa: BLE001
+            continue
+    return info
+
+
+def fw_record(commits):
+    """Remember what was installed, so the panel can show installed revision
+    against latest without another round trip."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(DB)),
+                               'firmware.json'), 'w') as fh:
+            json.dump({'at': int(time.time()), 'version': VERSION,
+                       'commits': commits}, fh)
+    except OSError:
+        pass
+
+
+def fw_installed():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(DB)),
+                               'firmware.json')) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def fw_headers():
+    h = {'User-Agent': 'nz-ingest'}
+    if UPDATE_TOKEN:
+        h['Authorization'] = 'Bearer ' + UPDATE_TOKEN
+        h['Accept'] = 'application/vnd.github.raw'
+        h['X-GitHub-Api-Version'] = '2022-11-28'
+    return h
+
+
+def fw_fetch():
+    """Pull each source file and refuse anything that will not compile.
+
+    The gate matters more than the fetch: a truncated download or a syntax
+    error written over a running app is a brick, and nothing inside the
+    container could then serve a page to fix it from.
+    """
+    if not UPDATE_BASE:
+        raise RuntimeError('NZ_UPDATE_BASE is not set')
+    import urllib.request
+    import urllib.error
+    got = {}
+    for f in CODE_FILES:
+        url = fw_url(f)
+        req = urllib.request.Request(url, headers=fw_headers())
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                b = r.read()
+        except urllib.error.HTTPError as exc:
+            hint = ''
+            if exc.code == 404:
+                hint = (' — repo/branch/path wrong, or the repo is private and '
+                        'NZ_UPDATE_TOKEN is not set' if not UPDATE_TOKEN
+                        else ' — path wrong, or the token cannot read this repo')
+            elif exc.code in (401, 403):
+                hint = ' — token rejected or lacks Contents:read on this repo'
+            raise RuntimeError('%s: HTTP %s%s' % (f, exc.code, hint))
+        if len(b) < 600:
+            raise RuntimeError('%s came back only %d bytes - refusing (%s)'
+                               % (f, len(b), _peek(b)))
+        # utf-8-sig strips a BOM. Anything that has passed through a Windows
+        # editor on its way to the repo may carry three invisible bytes at the
+        # front, and Python rejects those as a syntax error on line 1.
+        try:
+            text = b.decode('utf-8-sig')
+        except UnicodeDecodeError as exc:
+            raise RuntimeError('%s is not text: %s (%s)'
+                               % (f, exc, _peek(b)))
+        if text.lstrip().startswith(('<!DOCTYPE', '<html', '<?xml')):
+            raise RuntimeError(
+                '%s came back as a web page, not code - the base URL is '
+                'pointing at a GitHub page rather than raw content. It must '
+                'start https://raw.githubusercontent.com/ (got: %s)'
+                % (f, _peek(b)))
+        try:
+            compile(text, f, 'exec')
+        except SyntaxError as exc:
+            raise RuntimeError('%s does not compile: %s (starts: %s)'
+                               % (f, exc, _peek(b)))
+        got[f] = text.encode('utf-8')      # normalised, BOM removed
+    return got
+
+
+def fw_compare(got):
+    loc = fw_local()
+    out = {}
+    for f, b in got.items():
+        sha = hashlib.sha256(b).hexdigest()[:12]
+        out[f] = {'bytes': len(b), 'sha': sha,
+                  'changed': sha != loc[f]['sha']}
+    return out
+
+
+def fw_install(got, commits=None):
+    """Write the verified files, keeping .bak copies, then exit so the
+    container's restart policy brings the new code up."""
+    for f, b in got.items():
+        path = os.path.join(CODE_DIR, f)
+        if os.path.exists(path):
+            shutil.copy2(path, path + '.bak')
+        tmp = path + '.new'
+        with open(tmp, 'wb') as fh:
+            fh.write(b)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    fw_record(commits or {})
+    threading.Timer(1.2, lambda: os._exit(3)).start()
 
 
 # ------------------------------------------------------------------ helpers
@@ -530,7 +834,7 @@ def watcher():
 
 # ----------------------------------------------------------------- web UI
 
-PAGE = """<!doctype html><meta charset=utf-8>
+PAGE = r"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>NZ-INGEST</title>
 <style>
@@ -593,21 +897,43 @@ a{color:inherit;text-decoration:none}
 .sub{font:10px/1.4 var(--mono);letter-spacing:.12em;color:var(--faint);
   margin-top:5px}
 
-/* ---- LED strip ---- */
-.leds{display:flex;gap:9px;padding:13px 4px;border-bottom:1px solid var(--edge);
-  align-items:center;flex-wrap:wrap}
-.led{width:9px;height:9px;border-radius:50%;background:#1b1b22;
-  box-shadow:0 0 0 1px #000 inset;transition:background .3s,box-shadow .3s}
-.led.r{background:var(--red);box-shadow:0 0 10px var(--red)}
-.led.c{background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+/* ---- indicator strip: hex lamps in a recessed channel ---- */
+.leds{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:14px 0 2px;
+  padding:11px 14px;background:#07070c;border-radius:7px;
+  border:1px solid #000;
+  box-shadow:0 3px 9px rgba(0,0,0,.75) inset,
+             0 1px 0 rgba(255,255,255,.045)}
+.led{width:15px;height:17px;background:#191921;
+  clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);
+  transition:background .3s,box-shadow .3s,filter .3s}
+.led.r{background:var(--red);filter:drop-shadow(0 0 7px var(--red))}
+.led.c{background:var(--cyan);filter:drop-shadow(0 0 7px var(--cyan))}
+.led.a{background:var(--amber);filter:drop-shadow(0 0 7px var(--amber))}
 .ledlab{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--faint);
-  margin-left:8px}
+  margin-left:10px}
+.keys{display:flex;gap:4px;margin-left:auto}
+.keys i{display:block;width:15px;height:15px;border-radius:2px;
+  background:linear-gradient(#2b2b36,#171720);
+  box-shadow:0 1px 0 rgba(255,255,255,.08) inset,0 1px 2px rgba(0,0,0,.7)}
+.keys i.y{background:linear-gradient(#ffd24a,#c99408);
+  box-shadow:0 0 9px rgba(255,198,63,.5)}
+.keys i.w{background:linear-gradient(#fbfdff,#b9c2d2)}
+.dome{width:34px;height:34px;border-radius:50%;flex:none;
+  background:radial-gradient(circle at 36% 28%,#f2f5fa 0%,#9aa2b2 34%,
+    #454b58 62%,#171b22 100%);
+  box-shadow:0 0 0 3px #14161c,0 0 0 4px #2b2f38,0 3px 7px rgba(0,0,0,.8);
+  margin-left:14px}
 
 /* ---- modules ---- */
 .mods{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
   padding:16px 0 4px}
-.mod{background:var(--inset);border:1px solid var(--edge);border-radius:8px;
-  padding:12px 14px;box-shadow:0 0 0 1px rgba(0,0,0,.6) inset}
+.mod{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:13px 15px;position:relative;
+  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
+             0 1px 0 rgba(255,255,255,.055),
+             0 0 0 1px #21212a}
+.mod:before{content:"";position:absolute;inset:4px;border-radius:5px;
+  border:1px solid rgba(255,255,255,.035);pointer-events:none}
 .mod b{display:block;font:600 27px/1.05 var(--disp);letter-spacing:-.02em;
   color:var(--ink)}
 .mod span{display:block;font:9px/1.4 var(--mono);letter-spacing:.15em;
@@ -619,9 +945,13 @@ a{color:inherit;text-decoration:none}
 .mod.cy b{color:var(--cyan);text-shadow:0 0 22px rgba(58,208,255,.4)}
 
 /* ---- viewport (scan) ---- */
-.vp{position:relative;margin:14px 0 4px;border:1px solid var(--edge);
+.vp{position:relative;margin:14px 0 4px;border:1px solid #000;
   border-radius:10px;overflow:hidden;background:#05050a;
-  box-shadow:0 0 0 1px #000 inset,0 0 44px rgba(58,208,255,.07) inset}
+  box-shadow:0 6px 20px rgba(0,0,0,.85) inset,
+             0 0 44px rgba(58,208,255,.07) inset,
+             0 1px 0 rgba(255,255,255,.05),0 0 0 1px #21212a}
+.vp:before{content:"";position:absolute;inset:6px;border-radius:6px;
+  border:1px solid rgba(255,255,255,.045);pointer-events:none;z-index:2}
 .vp canvas{display:block;width:100%;height:186px}
 .vp .ov{position:absolute;inset:0;padding:0 22px;display:flex;
   flex-direction:column;justify-content:center;pointer-events:none;
@@ -633,9 +963,88 @@ a{color:inherit;text-decoration:none}
 .vp .meta{font:11px/1.5 var(--mono);color:#9aa2b4}
 .vp .act{position:absolute;right:14px;bottom:13px}
 
+/* ---- in-flight unified panel ---- */
+.inflight{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:14px 16px;margin:10px 0;
+  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
+             0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
+.inflight .prog{margin-bottom:10px;display:grid;gap:4px}
+.inflight .prog .row{display:grid;grid-template-columns:80px 1fr;gap:12px;
+  align-items:baseline;font:11px/1.5 var(--mono)}
+.inflight .prog .label{color:#666;text-transform:uppercase;letter-spacing:.08em;
+  font-size:9px}
+.inflight .prog .val{color:var(--cyan);font-weight:600}
+.inflight .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
+  border-radius:4px;padding:6px 8px;margin:8px 0;font:10px/1.4 var(--mono);
+  color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inflight .stats-head{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--amber);
+  text-transform:uppercase;margin:8px 0 6px}
+.inflight .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.inflight .stat{display:flex;flex-direction:column;gap:3px}
+.inflight .label{font:9px/1 var(--mono);color:#666;text-transform:uppercase;
+  letter-spacing:.08em}
+.inflight .val{font:600 13px/1 var(--mono);color:var(--cyan)}
+.inflight .bar{height:4px;background:rgba(0,0,0,.5);border:1px solid #333;
+  border-radius:2px;overflow:hidden;--w:0%}
+.inflight .bar:before{content:"";display:block;height:100%;background:
+  linear-gradient(90deg,#4dd0ff,#00d9ff);width:var(--w);transition:width .15s ease-out}
+.inflight #speedbar:before{background:linear-gradient(90deg,#4dd0ff,#00d9ff)}
+.inflight #cpubar:before{background:linear-gradient(90deg,#ffaa00,#ff8800)}
+.inflight #membar:before{background:linear-gradient(90deg,#ff6b6b,#ff4444)}
+.inflight #iobar:before{background:linear-gradient(90deg,#66ff99,#44ff77)}
+
+/* ---- archive snapshot ----
+   Same acrylic plate as .mod, but the cells are read as a set rather than
+   headline numbers, so the type is one step down and the glow is dropped
+   from all but the size figure. The carousel is a stack of absolutely
+   positioned cards cross-fading in place: rotating by re-rendering innerHTML
+   would reflow the rack on every tick, which is the flicker the firmware
+   panel was rebuilt to avoid. */
+.asnap{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr)}
+@media (max-width:720px){.asnap{grid-template-columns:minmax(0,1fr)}}
+/* Fixed 2x2 rather than auto-fit: a camera body like "ILCE-7RM3" needs the
+   width, and auto-fit was collapsing it to four ~100px columns and clipping
+   the name to "ILCE-1...". */
+.acells{display:grid;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr));
+  align-content:start}
+.acell{background:#0a0a10;border:1px solid #000;border-radius:6px;padding:10px 12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.6) inset,0 0 0 1px #1c1c24}
+.acell b{display:block;font:600 17px/1.1 var(--disp);letter-spacing:-.01em;
+  color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acell span{display:block;font:9px/1.4 var(--mono);letter-spacing:.15em;
+  color:var(--faint);margin-top:5px;text-transform:uppercase}
+.acell.size b{color:var(--cyan);text-shadow:0 0 20px rgba(58,208,255,.35)}
+.acell.body b{font-size:14px;letter-spacing:0;font-family:var(--mono)}
+.exif{position:relative;height:104px;background:#08080c;border:1px solid #000;
+  border-radius:6px;overflow:hidden;
+  box-shadow:0 2px 10px rgba(0,0,0,.7) inset,0 0 0 1px #1c1c24}
+.exif:after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(90deg,rgba(58,208,255,.05),transparent 45%)}
+.exif-card{position:absolute;inset:0;padding:12px 14px;opacity:0;
+  transition:opacity .5s ease-in-out}
+.exif-card.on{opacity:1}
+.exif-card .p{font:11px/1.45 var(--mono);color:var(--cyan);word-break:break-all}
+.exif-card dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 0}
+.exif-card dt{font:9px/1.5 var(--mono);letter-spacing:.14em;color:var(--faint);
+  text-transform:uppercase}
+.exif-card dd{margin:0;font:10px/1.5 var(--mono);color:var(--dim)}
+.exif-dots{display:flex;gap:4px;position:absolute;right:12px;bottom:10px}
+.exif-dots i{width:4px;height:4px;border-radius:50%;background:#22222c;
+  transition:background .4s}
+.exif-dots i.on{background:var(--cyan);box-shadow:0 0 6px rgba(58,208,255,.7)}
+.fmts{display:flex;height:5px;border-radius:3px;overflow:hidden;margin:12px 0 7px;
+  background:#08080c;box-shadow:0 0 0 1px #1c1c24}
+.fmts i{height:100%}
+.fmtkey{display:flex;gap:14px;flex-wrap:wrap;font:9px/1.4 var(--mono);
+  letter-spacing:.1em;color:var(--faint);text-transform:uppercase}
+.fmtkey s{width:6px;height:6px;border-radius:2px;display:inline-block;
+  margin-right:5px;text-decoration:none}
+
 /* ---- controls ---- */
-.rack{background:var(--inset);border:1px solid var(--edge);border-radius:8px;
-  padding:14px 16px;margin:12px 0}
+.rack{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:15px 17px;margin:12px 0;position:relative;
+  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
+             0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
 .rack h3{margin:0 0 3px;font:600 12px/1.3 var(--disp);letter-spacing:.14em;
   text-transform:uppercase;color:var(--ink)}
 .rack p{margin:0;font:11px/1.55 var(--mono);color:var(--dim);max-width:62ch}
@@ -660,8 +1069,10 @@ h2.sec{font:600 11px/1 var(--disp);letter-spacing:.2em;text-transform:uppercase;
 h2.sec:after{content:"";flex:1;height:1px;background:var(--edge)}
 h1{font:600 17px/1.2 var(--disp);letter-spacing:.05em;margin:0 0 3px}
 .note{font:11px/1.6 var(--mono);color:var(--dim);margin:0 0 16px;max-width:76ch}
-.card{background:var(--inset);border:1px solid var(--edge);border-radius:8px;
-  padding:13px 15px;margin:0 0 11px}
+.card{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:14px 16px;margin:0 0 11px;
+  box-shadow:0 3px 10px rgba(0,0,0,.6) inset,
+             0 1px 0 rgba(255,255,255,.05),0 0 0 1px #21212a}
 .scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font:11px/1.5 var(--mono)}
 th{text-align:left;padding:7px 9px;border-bottom:1px solid var(--edge2);
@@ -720,6 +1131,7 @@ code{font-family:var(--mono);color:var(--cyan);word-break:break-all}
       <div class=mark>
         <i class=s></i><i></i><i class=s></i>
       </div>
+      <div class=dome></div>
       <div>
         <div class=wordmark>NZ&middot;INGEST</div>
         <div class=sub id=hostline>NODE ZERO / MAXIMILIAN</div>
@@ -738,6 +1150,9 @@ code{font-family:var(--mono);color:var(--cyan);word-break:break-all}
 <script>
 const E=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let view={kind:'home'};
+// Cached so a periodic re-render never flashes the loading placeholder, and
+// a signature of the state so an idle panel is not rebuilt for no reason.
+let fwCache=null, asCache=null, homeSig='', homeDrawn=false;
 async function api(u,o){const r=await fetch(u,o);return r.json()}
 
 /* ---- panel head ------------------------------------------------------- */
@@ -754,13 +1169,16 @@ function setHead(d,j){
   lamp('t-review',review);
   // 12 lamps: a scan's progress when one is running, otherwise the archive's
   // standing state - lit cyan for clean, red where something wants a look.
-  const N=12; let lit=0, kind='c';
-  if(j.running&&j.total){ lit=Math.round(N*j.done/j.total); }
+  const N=10; let lit=0, kind='c';
+  if(j.running&&j.total){ lit=Math.round(N*j.done/j.total); kind='a'; }
   else if(d.manifest){ lit=N; kind=review?'r':'c'; }
   let h='';
   for(let i=0;i<N;i++) h+=`<i class="led ${i<lit?kind:''}"></i>`;
   h+=`<span class=ledlab>${j.running?E(j.phase).toUpperCase()
       :(d.manifest?d.manifest.toLocaleString()+' INDEXED':'NO MANIFEST')}</span>`;
+  h+=`<span class=keys><i class="${j.running?'y':''}"></i>
+      <i class="${review?'y':''}"></i><i class="${d.waiting?'w':''}"></i>
+      <i></i></span>`;
   document.getElementById('leds').innerHTML=h;
   document.getElementById('footlab').innerHTML=
     (d.readonly?'READ-ONLY &middot; ':'')+'DROP '+E(d.drop);
@@ -814,45 +1232,109 @@ function startWarp(cv){
   }
   requestAnimationFrame(frame);
 }
+function ago(iso){
+  if(!iso) return '';
+  const t=Date.parse(iso); if(isNaN(t)) return '';
+  const s=Math.max(0,(Date.now()-t)/1000|0);
+  if(s<90) return s+'s ago';
+  const m=s/60|0; if(m<90) return m+'m ago';
+  const h=m/60|0; if(h<36) return h+'h ago';
+  return (h/24|0)+'d ago';
+}
 function hms(s){s=Math.max(0,s|0);const h=s/3600|0,m=(s%3600)/60|0;
   return h?h+'h '+m+'m':(m?m+'m '+(s%60)+'s':s+'s')}
 function vpanel(){
   return `<div class=vp><canvas id=warp></canvas>
-    <div class=ov id=jobtxt></div>
     <div class=act><button class=hot onclick="act('scan_stop',0)">halt</button></div>
+  </div>
+  <div class=inflight>
+    <div class=prog>
+      <div class=row><div class=label>Phase</div><div class=val id=phase>—</div></div>
+      <div class=row><div class=label>Total</div><div class=val id=prog-total>—</div></div>
+      <div class=row><div class=label>Done</div><div class=val id=prog-done>—</div></div>
+      <div class=row><div class=label>Speed</div><div class=val id=prog-speed>—</div></div>
+      <div class=row><div class=label>ETA</div><div class=val id=prog-eta>—</div></div>
+    </div>
+    <div class=file-box id=curfile></div>
+    <div class=stats-head>SYSTEM STATUS</div>
+    <div class=stats>
+      <div class=stat><div class=label>Speed</div><div class=val id=speed>—</div><div class=bar id=speedbar></div></div>
+      <div class=stat><div class=label>CPU</div><div class=val id=cpustat>—</div><div class=bar id=cpubar></div></div>
+      <div class=stat><div class=label>Memory</div><div class=val id=memstat>—</div><div class=bar id=membar></div></div>
+      <div class=stat><div class=label>I/O</div><div class=val id=iostat>—</div><div class=bar id=iobar></div></div>
+    </div>
   </div>`;
-}
-function jobText(j){
-  const b=[];
-  if(j.rate) b.push(Math.round(j.rate)+' files/sec');
-  if(j.eta) b.push(hms(j.eta)+' remaining');
-  if(j.skipped) b.push(j.skipped.toLocaleString()+' unchanged');
-  if(j.hash) b.push('hashing');
-  return `<div class=ph>${E(j.phase)}</div>
-  <div class=big>${j.total?j.done.toLocaleString()+' / '+j.total.toLocaleString()
-    :j.done.toLocaleString()}${j.pct?'  '+j.pct+'%':''}</div>
-  <div class=meta>${E(b.join('  ·  ')||'spinning up')}</div>`;
 }
 async function jobTick(){
   let j,d; try{ j=await api('/api/job'); d=await api('/api/state'); }catch(e){return}
   warpRate=j.running?(j.rate||0):0;
-  // Zero while walking the tree - nothing is being read, and the still field
-  // should say so. Once inspecting, a floor so it reads as alive even before
-  // the first rate sample lands.
   const walking=/walk|manifest/i.test(j.phase||'');
   warpV=!j.running?0:(walking?0:Math.max(0.14,Math.min(1,warpRate/600)));
   setHead(d,j);
-  const box=document.getElementById('jobtxt');
-  if(j.running&&view.kind==='home'&&!box) return home();
-  if(!j.running&&box) return home();
-  if(j.running&&box){ box.innerHTML=jobText(j);
-    startWarp(document.getElementById('warp')); }
+  // Check if in-flight panel exists (scan running)
+  const inflight=document.getElementById('phase');
+  if(j.running&&view.kind==='home'&&!inflight) return home();
+  // A scan just finished: the manifest moved, so the snapshot's numbers are
+  // stale by definition. Drop the cache and let home() refetch once.
+  if(!j.running&&inflight){ asCache=null; return home(); }
+  if(j.running&&inflight){
+    // Update progress section rows
+    const ph=document.getElementById('phase');
+    if(ph) ph.textContent=E(j.phase||'').toUpperCase();
+    const progTotal=document.getElementById('prog-total');
+    if(progTotal) progTotal.textContent=j.total?j.total.toLocaleString():'—';
+    const progDone=document.getElementById('prog-done');
+    if(progDone){
+      let dtext=j.done.toLocaleString();
+      if(j.pct) dtext+=' ('+j.pct+'%)';
+      progDone.textContent=dtext;
+    }
+    const progSpeed=document.getElementById('prog-speed');
+    if(progSpeed) progSpeed.textContent=Math.round(j.rate||0)+' files/sec';
+    const progEta=document.getElementById('prog-eta');
+    if(progEta){
+      if(j.eta) progEta.textContent=hms(j.eta)+' remaining';
+      else progEta.textContent='—';
+    }
+    // Update current file and system stats
+    const f=document.getElementById('curfile');
+    if(f) f.textContent=j.file||'(scanning)';
+    const speed=document.getElementById('speed');
+    const speedVal=Math.round(j.rate||0);
+    if(speed) speed.textContent=speedVal+' files/sec';
+    const cpustat=document.getElementById('cpustat');
+    const cpuVal=j.cpu||0;
+    if(cpustat) cpustat.textContent=cpuVal.toFixed(1)+'%';
+    const memstat=document.getElementById('memstat');
+    const memVal=j.mem_mb||0;
+    if(memstat) memstat.textContent=memVal+' MB';
+    const iostat=document.getElementById('iostat');
+    const ioVal=j.io_mb||0;
+    if(iostat) iostat.textContent=ioVal.toFixed(1)+' MB/s';
+    // Set bar widths (speed: 0-120 files/sec, cpu: 0-100%, mem: scale to reasonable max, io: 0-300 MB/s)
+    setBarWidth('speedbar', Math.min(100, speedVal/120*100));
+    setBarWidth('cpubar', cpuVal);
+    setBarWidth('membar', Math.min(100, memVal/512*100));
+    setBarWidth('iobar', Math.min(100, ioVal/300*100));
+    startWarp(document.getElementById('warp'));
+  }
+}
+function setBarWidth(id, pct){
+  const bar=document.getElementById(id);
+  if(bar) bar.style.setProperty('--w',Math.max(0,Math.min(100,pct))+'%');
 }
 
 /* ---- views ------------------------------------------------------------ */
 async function home(){
   const d=await api('/api/state'), j=await api('/api/job');
   view={kind:'home'};
+  // Re-rendering an idle panel every few seconds made the firmware rack
+  // flash. Only redraw when something a person would notice has changed.
+  const sig=JSON.stringify([d.manifest,d.hashed,d.damaged,d.unreadable,
+    d.waiting,d.readonly,j.running,j.note,
+    (d.batches||[]).map(b=>[b.id,b.state,b.note])]);
+  if(homeDrawn&&sig===homeSig&&(!j.running||document.getElementById('phase'))) return;
+  homeSig=sig; homeDrawn=true;
   let h='';
   h+=`<div class=mods>
     ${mod(d.manifest.toLocaleString(),'files indexed','cy')}
@@ -878,6 +1360,11 @@ async function home(){
       <button class=go onclick="act('drop_now',0)">scan drop</button>
     </div></div>`;
   }
+  // Same rule as the firmware rack below: resolve the fetch *before* building
+  // the section so the panel enters the DOM once, at its final height.
+  if(!asCache){ try{ asCache=await api('/api/archive-stats'); }catch(e){ asCache=null; } }
+  if(asCache) h+=`<h2 class=sec>Archive snapshot</h2>
+    <div class=rack>${asHtml(asCache)}</div>`;
   if(j.note) h+=`<div class="card d">LAST SCAN &nbsp;${E(j.note)}</div>`;
   h+=`<h2 class=sec>Batches</h2>`;
   if(!(d.batches||[]).length)
@@ -890,8 +1377,19 @@ async function home(){
       <button class="${hot?'go':''}" onclick="show(${b.id})">${hot?'review':'open'}</button>
     </div></div>`;
   }
+  // Firmware used to be stitched in after the fact: write a "loading…"
+  // placeholder, then swap it for the real table once the fetch lands. Two
+  // DOM writes of different heights is exactly what "flickers and shrinks"
+  // means, and it happened on every redraw, not just the first. Fetch (or
+  // reuse the cache) *before* building this section so the whole panel goes
+  // into the DOM once, at its final height. Auto-check for updates on first load.
+  if(!fwCache){ try{ fwCache=await api('/api/firmware?check=1'); }catch(e){ fwCache=null; } }
+  h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>${fwCache?fwHtml(fwCache):
+    `<div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
+    <p>loading&hellip;</p></div></div>`}</div>`;
   document.getElementById('app').innerHTML=h;
   setHead(d,j);
+  startExif();
   if(j.running){
     const walking=/walk|manifest/i.test(j.phase||'');
     warpV=walking?0:Math.max(0.14,Math.min(1,(j.rate||0)/600));
@@ -901,8 +1399,210 @@ async function home(){
   startWarp(document.getElementById('warp'));
 }
 
+/* ---- imperial spinner --------------------------------------------------
+   This was pasted inline twice, and in both copies every arc had endpoints
+   off its own declared radius - the worst claimed r=90 with endpoints at
+   77.8 and 94.9. SVG answers an impossible arc by growing the radius until
+   the chord fits and then re-centring it, so that path orbited a point
+   nowhere near the core and read as a tilted blob rather than a ring. One
+   orbit dot sat at r=75 among three at r=85 for the same reason: the
+   coordinates were typed by hand instead of computed. They are computed
+   here, from one centre, so concentricity is not something that can rot.
+
+   The three orbits are spaced so the counter-rotating rings cannot cross:
+   ring1 occupies 74-82, the dots 85-93, ring2 95-101, and the outermost
+   glow lands at ~107 inside a 110 half-box. ring2 is the outer one - it
+   used to share r=90 with ring1 and swept straight through it. */
+const IMP={c:110, r1:78, rd:89, r2:98};
+function impPt(r,deg){
+  const t=deg*Math.PI/180;
+  return [(IMP.c+r*Math.cos(t)).toFixed(2),(IMP.c+r*Math.sin(t)).toFixed(2)];
+}
+function impArc(r,a0,a1){
+  const [x0,y0]=impPt(r,a0), [x1,y1]=impPt(r,a1);
+  return `M${x0},${y0} A${r},${r} 0 ${Math.abs(a1-a0)>180?1:0},${a1>a0?1:0} ${x1},${y1}`;
+}
+function imperialSvg(){
+  const arc=(r,a0,a1,w,col,op)=>`<path d="${impArc(r,a0,a1)}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="round"${op?` opacity="${op}"`:''} filter="url(#glow)"/>`;
+  const dot=a=>{ const [x,y]=impPt(IMP.rd,a);
+    return `<circle cx="${x}" cy="${y}" r="4" fill="#ff6666" filter="url(#glow)"/>`; };
+  const tick=a=>{ const [x0,y0]=impPt(45,a), [x1,y1]=impPt(68,a);
+    return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>`; };
+  return `<div class=row style="justify-content:center;padding:60px 0">
+    <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
+      <defs>
+        <!-- filterUnits is not decoration. The default is objectBoundingBox,
+             and a horizontal or vertical line has a zero-area bbox, which
+             makes the filter region empty and drops the element entirely.
+             That is why four of the eight tick marks have never once been
+             drawn. A user-space region is independent of the bbox. -->
+        <filter id="glow" filterUnits="userSpaceOnUse"
+                x="0" y="0" width="220" height="220">
+          <feGaussianBlur stdDeviation="3" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <style>
+          @keyframes spin1{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+          @keyframes spin2{from{transform:rotate(0)}to{transform:rotate(-360deg)}}
+          @keyframes spin3{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+          @keyframes pulse{0%,100%{r:16px;opacity:.6}50%{r:22px;opacity:1}}
+          .ring1{animation:spin1 6s linear infinite;transform-origin:110px 110px}
+          .ring2{animation:spin2 10s linear infinite;transform-origin:110px 110px}
+          .ring3{animation:spin3 8s linear infinite;transform-origin:110px 110px}
+          .pulse{animation:pulse 2s ease-in-out infinite}
+          @media (prefers-reduced-motion:reduce){
+            .ring1,.ring2,.ring3,.pulse{animation:none}}
+        </style>
+      </defs>
+      <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
+      <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
+      ${[0,45,90,135,180,225,270,315].map(tick).join('')}
+      <g class="ring1">${arc(IMP.r1,-90,-35,8,'#ff3333')}${arc(IMP.r1,90,145,8,'#ff3333')}</g>
+      <g class="ring3">${dot(0)}${dot(90)}${dot(180)}${dot(270)}</g>
+      <g class="ring2">${arc(IMP.r2,0,54,6,'#ff4444','0.8')}${arc(IMP.r2,180,234,6,'#ff4444','0.8')}</g>
+      <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
+      <circle cx="110" cy="110" r="10" fill="#000"/>
+    </svg>
+  </div>`;
+}
+
+async function fw(check){
+  const el=document.getElementById('fwrack'); if(!el) return;
+  if(!check&&fwCache) return fwRender(fwCache);
+  if(check){
+    el.innerHTML=`${imperialSvg()}`;
+  }
+  const start=Date.now();
+  let f; try{ f=await api('/api/firmware'+(check?'?check=1':'')); }
+  catch(e){ return; }
+  // Enforce 5-second minimum display
+  const elapsed=Date.now()-start;
+  if(check&&elapsed<5000) await new Promise(r=>setTimeout(r,5000-elapsed));
+  fwCache=f; fwRender(f);
+}
+// Pure string builder - no DOM access - so home() can lay the firmware
+// section into its own single innerHTML write instead of writing a
+// placeholder now and the real table a moment later.
+/* ---- archive snapshot ------------------------------------------------- */
+/* Binary units: these are file sizes on a ZFS pool, and the pool reports
+   TiB. Showing decimal TB here and TiB in TrueNAS for the same bytes is how
+   you end up not trusting either number. */
+function fmtBytes(b){
+  b=Number(b)||0;
+  const u=['B','KiB','MiB','GiB','TiB','PiB'];
+  let i=0; while(b>=1024&&i<u.length-1){ b/=1024; i++; }
+  return (i===0?b:b.toFixed(b<10?2:1))+' '+u[i];
+}
+const FMT_COLOR={tiff:'#3ad0ff',jpeg:'#ffc63f',bmff:'#ff7d24',png:'#7bd88f',
+  other:'#4b5060'};
+function fmtDT(s){
+  // EXIF DateTimeOriginal is "YYYY:MM:DD hh:mm:ss" - only the date half is
+  // colon-separated in a way Date() misreads, so rewrite rather than parse.
+  const m=/^(\d{4}):(\d{2}):(\d{2})[ T](.+)$/.exec(String(s||''));
+  return m?`${m[1]}-${m[2]}-${m[3]} ${m[4]}`:(s||'—');
+}
+function asHtml(a){
+  const named=(a.models||[]).filter(m=>m.model);
+  const top=named.length?named[0]:null;
+  const cells=[
+    [a.file_count.toLocaleString(),'files',''],
+    [fmtBytes(a.total_size),'total size','size'],
+    [(a.file_count?fmtBytes(a.total_size/a.file_count):'—'),'average',''],
+    [top?E(top.model):'—','top body','body'],
+  ].map(([n,l,c])=>`<div class="acell ${c}"><b>${n}</b><span>${E(l)}</span></div>`)
+   .join('');
+
+  const fmts=Object.entries(a.formats||{}).filter(([k,v])=>v>0);
+  const ftot=fmts.reduce((s,[,v])=>s+v,0)||1;
+  const bar=fmts.map(([k,v])=>`<i style="width:${(v/ftot*100).toFixed(2)}%;
+    background:${FMT_COLOR[k]||FMT_COLOR.other}"></i>`).join('');
+  const key=fmts.map(([k,v])=>`<span><s style="background:${
+    FMT_COLOR[k]||FMT_COLOR.other}"></s>${E(k||'unknown')} ${
+    (v/ftot*100).toFixed(0)}%</span>`).join('');
+
+  const s=a.samples||[];
+  const cards=s.map((x,i)=>`<div class="exif-card${i?'':' on'}">
+    <div class=p>${E(x.path)}</div>
+    <dl><dt>body</dt><dd>${E(x.model||'—')}</dd>
+    <dt>shot</dt><dd>${E(fmtDT(x.dt))}</dd>
+    <dt>size</dt><dd>${fmtBytes(x.size)}${x.fmt?' &middot; '+E(x.fmt):''}</dd></dl>
+  </div>`).join('');
+  const dots=s.map((_,i)=>`<i class="${i?'':'on'}"></i>`).join('');
+
+  return `<div class=asnap>
+    <div><div class=acells>${cells}</div>
+      <div class=fmts>${bar}</div><div class=fmtkey>${key}</div></div>
+    <div class=exif id=exif>${s.length?cards+`<div class=exif-dots>${dots}</div>`
+      :`<div class="exif-card on"><div class=p>No dated frames with a camera
+        body yet — run a scan to populate the manifest.</div></div>`}</div>
+  </div>`;
+}
+/* One interval for the life of the page. It re-reads the DOM each tick, so a
+   home() redraw that replaces the cards cannot leave a second timer behind
+   driving elements that no longer exist. */
+let exifTimer=null;
+function startExif(){
+  if(exifTimer||matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  exifTimer=setInterval(()=>{
+    const box=document.getElementById('exif'); if(!box) return;
+    const cards=box.querySelectorAll('.exif-card');
+    const dots=box.querySelectorAll('.exif-dots i');
+    if(cards.length<2) return;
+    let i=0; cards.forEach((c,n)=>{ if(c.classList.contains('on')) i=n; });
+    const j=(i+1)%cards.length;
+    cards[i].classList.remove('on'); cards[j].classList.add('on');
+    if(dots.length===cards.length){
+      dots[i].classList.remove('on'); dots[j].classList.add('on');
+    }
+  },4000);
+}
+
+function fwHtml(f){
+  let h=`<div class=row><div class=grow>
+    <h3>Version ${E(f.version)}</h3>
+    <p>${f.base?'Source '+E(f.base):
+      'No update source configured. Set <code>NZ_UPDATE_BASE</code> to a raw '+
+      'file base URL — a GitHub repo <code>/app</code> folder, say.'}
+    ${f.writable?'':' <b>Code directory is read-only</b> — remove the '+
+      '<code>:ro</code> from the /app volume to allow updates.'}</p></div>
+    ${f.base?`<button onclick="fw(true)">check</button>`:''}
+    ${f.remote&&Object.values(f.remote).some(v=>v.changed)&&f.writable
+      ?`<button class=go onclick="act('fw_install',0)">install &amp; restart</button>`:''}
+  </div>`;
+  if(f.error) h+=`<div class="card alert" style="margin-top:12px">
+    ${E(f.error)}</div>`;
+  const inst=(f.installed&&f.installed.commits)||{};
+  h+=`<div class="scroll" style="margin-top:12px"><table>
+    <tr><th>file</th><th>bytes</th><th>rev</th><th>last change</th>
+    ${f.remote?'<th>state</th>':''}</tr>
+    ${(f.remote?Object.entries(f.remote):Object.entries(f.local)).map(([k,v])=>{
+      const c=(f.commits&&f.commits[k])||inst[k]||null;
+      const stale=c&&inst[k]&&f.commits&&f.commits[k]
+        &&inst[k].rev!==f.commits[k].rev;
+      return `<tr><td><code>${E(k)}</code>
+        <div class=d>${E(v.sha)}</div></td>
+        <td>${v.bytes.toLocaleString()}</td>
+        <td>${c?`<code>${E(c.rev)}</code>${stale
+          ?`<div class=d>have ${E(inst[k].rev)}</div>`:''}`:'<span class=d>—</span>'}</td>
+        <td>${c?`${E(c.msg||'')}<div class=d>${E(ago(c.when))}${
+          c.who?' · '+E(c.who):''}</div>`:'<span class=d>press check</span>'}</td>
+        ${f.remote?`<td>${v.changed
+          ?'<span class=pill style="color:var(--amber)">NEW</span>'
+          :'<span class=d>same</span>'}</td>`:''}</tr>`}).join('')}
+    </table></div>`;
+  if(f.installed&&f.installed.at) h+=`<p class="note d" style="margin:10px 0 0">
+    Installed ${E(ago(new Date(f.installed.at*1000).toISOString()))} —
+    version ${E(f.installed.version||'?')}</p>`;
+  if(f.remote&&!Object.values(f.remote).some(v=>v.changed))
+    h+=`<p class="note d" style="margin:12px 0 0">Already up to date.</p>`;
+  return h;
+}
+function fwRender(f){
+  const el=document.getElementById('fwrack'); if(!el) return;
+  el.innerHTML=fwHtml(f);
+}
 async function dmg(){
-  const d=await api('/api/damaged'); view={kind:'damaged'};
+  const d=await api('/api/damaged'); view={kind:'damaged'}; homeDrawn=false;
   let h=`<h1>Files that need a look</h1>
   <p class=note>Archive files that did not pass a structural check. A check is
   a judgement, not a fact &mdash; some of these will be fine, and the verdict
@@ -940,7 +1640,7 @@ async function dmg(){
 }
 
 async function show(id){
-  const d=await api('/api/batch/'+id); view={kind:'batch',id};
+  const d=await api('/api/batch/'+id); view={kind:'batch',id}; homeDrawn=false;
   let h=`<h1>Batch #${d.id}</h1><p class=note>${E(d.name)} &middot; ${E(d.state)}</p>
   <p><button onclick=home()>&larr; panel</button></p>`;
   if(d.blocked) h+=`<div class="card alert"><b>${d.counts.SKIP||0} file(s) could
@@ -980,7 +1680,11 @@ async function show(id){
 async function act(what,id,action,val){
   const body=new URLSearchParams({what,id,action:action||'',approved:val??'',
     hash:(what==='scan_start'||what==='scan_fresh')&&val?'1':''});
+  if(what==='fw_install'){
+    document.getElementById('app').innerHTML=`${imperialSvg()}<div class=row style="text-align:center;padding:20px"><p style="font:11px/1.5 var(--mono);color:#9aa2b4">Installing update and restarting...</p></div>`;
+  }
   await api('/api/act',{method:'POST',body});
+  if(what==='fw_install'){ fwCache=null; asCache=null; homeDrawn=false; return; }
   setTimeout(()=>view.kind==='batch'?show(view.id)
     :(view.kind==='damaged'?dmg():home()),350);
 }
@@ -1020,12 +1724,29 @@ class Handler(BaseHTTPRequestHandler):
                 'progress': progress,
                 'batches': [dict(b) for b in store.batches(25)],
             }))
+        if u.path == '/api/archive-stats':
+            stats = store.archive_stats()
+            return self._send(200, json.dumps(stats))
+        if u.path == '/api/firmware':
+            want = parse_qs(u.query).get('check')
+            info = {'version': VERSION, 'base': UPDATE_BASE,
+                    'token': bool(UPDATE_TOKEN),
+                    'writable': os.access(CODE_DIR, os.W_OK),
+                    'local': fw_local(), 'remote': None, 'error': None,
+                    'commits': {}, 'installed': fw_installed()}
+            if want:
+                try:
+                    info['remote'] = fw_compare(fw_fetch())
+                except Exception as exc:                    # noqa: BLE001
+                    info['error'] = str(exc)
+                info['commits'] = fw_commits()
+            return self._send(200, json.dumps(info))
         if u.path == '/api/job':
             el = time.time() - JOB['started'] if JOB['started'] else 0
             left = max(0, JOB['total'] - JOB['done'])
             eta = int(left / JOB['rate']) if JOB['rate'] > 0.01 else 0
             return self._send(200, json.dumps(dict(
-                JOB, elapsed=int(el), eta=eta,
+                JOB, elapsed=int(el), eta=eta, version=VERSION,
                 pct=round(100.0 * JOB['done'] / JOB['total'], 1)
                 if JOB['total'] else 0.0)))
         if u.path == '/api/damaged':
@@ -1124,6 +1845,12 @@ class Handler(BaseHTTPRequestHandler):
                     job_start(ARCHIVE, g('hash') == '1', False)
                 elif what == 'scan_stop':
                     _stop.set()
+                elif what == 'fw_install':
+                    if not os.access(CODE_DIR, os.W_OK):
+                        raise RuntimeError(
+                            'the code directory is mounted read-only - drop '
+                            'the ":ro" from the /app volume to allow updates')
+                    fw_install(fw_fetch(), fw_commits())
                 elif what == 'drop_now':
                     if walk_files(DROP, exclude_top=False):
                         nb = store.new_batch(
