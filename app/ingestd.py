@@ -1347,10 +1347,57 @@ async function home(){
 async function fw(check){
   const el=document.getElementById('fwrack'); if(!el) return;
   if(!check&&fwCache) return fwRender(fwCache);
-  if(check) el.innerHTML=`<div class=row><div class=grow><h3>Firmware</h3>
-    <p>contacting update source&hellip;</p></div></div>`;
+  if(check){
+    el.innerHTML=`<div class=row style="justify-content:center;padding:40px 0">
+      <svg class=imperial viewBox="0 0 120 120" style="width:80px;height:80px">
+        <defs>
+          <style>
+            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            .ring1 { animation: spin1 8s linear infinite; }
+            .ring2 { animation: spin2 12s linear infinite; }
+            .ring3 { animation: spin3 6s linear infinite; }
+          </style>
+        </defs>
+        <!-- Outer rings -->
+        <g class="ring1" style="transform-origin:60px 60px">
+          <path d="M60,15 A45,45 0 0,1 95,30" stroke="#ff3333" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+          <path d="M30,95 A45,45 0 0,1 15,60" stroke="#ff3333" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+        </g>
+        <g class="ring2" style="transform-origin:60px 60px">
+          <path d="M105,60 A45,45 0 0,1 90,90" stroke="#ff5555" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.7" filter="url(#glow)"/>
+          <path d="M30,30 A45,45 0 0,1 45,15" stroke="#ff5555" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.7" filter="url(#glow)"/>
+        </g>
+        <g class="ring3" style="transform-origin:60px 60px">
+          <circle cx="60" cy="20" r="2" fill="#ff3333" filter="url(#glow)"/>
+          <circle cx="100" cy="60" r="2" fill="#ff3333" filter="url(#glow)"/>
+          <circle cx="60" cy="100" r="2" fill="#ff3333" filter="url(#glow)"/>
+          <circle cx="20" cy="60" r="2" fill="#ff3333" filter="url(#glow)"/>
+        </g>
+        <!-- Center circle with spokes -->
+        <circle cx="60" cy="60" r="20" fill="none" stroke="#ffaaaa" stroke-width="1.5" opacity="0.8"/>
+        <line x1="60" y1="45" x2="60" y2="35" stroke="#333" stroke-width="2"/>
+        <line x1="75" y1="60" x2="85" y2="60" stroke="#333" stroke-width="2"/>
+        <line x1="60" y1="85" x2="60" y2="75" stroke="#333" stroke-width="2"/>
+        <line x1="45" y1="60" x2="35" y2="60" stroke="#333" stroke-width="2"/>
+        <circle cx="60" cy="60" r="8" fill="#000"/>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+          <feMerge>
+            <feMergeNode in="coloredBlur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </svg>
+    </div>`;
+  }
+  const start=Date.now();
   let f; try{ f=await api('/api/firmware'+(check?'?check=1':'')); }
   catch(e){ return; }
+  // Enforce 5-second minimum display
+  const elapsed=Date.now()-start;
+  if(check&&elapsed<5000) await new Promise(r=>setTimeout(r,5000-elapsed));
   fwCache=f; fwRender(f);
 }
 // Pure string builder - no DOM access - so home() can lay the firmware
