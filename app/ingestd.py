@@ -59,7 +59,7 @@ PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
 
-VERSION = '1.3.3'
+VERSION = '1.4.0'
 # Where the update button pulls from - a raw-file base URL, e.g.
 #   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
 # Left empty the panel simply reports that no source is configured. Nothing
@@ -275,6 +275,86 @@ def fw_url(fname):
             % (owner, repo, path, branch))
 
 
+def fw_repo():
+    """(owner, repo, branch, subpath) from a raw.githubusercontent base, or
+    None when the source is not GitHub."""
+    parts = UPDATE_BASE.split('raw.githubusercontent.com/', 1)
+    if len(parts) < 2:
+        return None
+    tail = parts[1]
+    bits = [b for b in tail.split('/') if b]
+    if len(bits) < 3:
+        return None
+    return (bits[0], bits[1], bits[2], '/'.join(bits[3:]))
+
+
+def fw_commits():
+    """Last commit per file: short sha, subject, date.
+
+    Decoration, not function. It must NEVER raise: an update that works is
+    worth more than knowing which commit it came from, and an early version
+    of this let a metadata failure block the install entirely.
+    """
+    try:
+        return _fw_commits()
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def _fw_commits():
+    info = {}
+    r = fw_repo()
+    if not r:
+        return info
+    import urllib.request
+    import urllib.error
+    owner, repo, branch, sub = r
+    for f in CODE_FILES:
+        path = ('%s/%s' % (sub, f)) if sub else f
+        url = ('https://api.github.com/repos/%s/%s/commits'
+               '?path=%s&sha=%s&per_page=1' % (owner, repo, path, branch))
+        try:
+            req = urllib.request.Request(url, headers=fw_headers())
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            if not data:
+                continue
+            c = data[0]
+            msg = (c.get('commit', {}).get('message') or '').split('\n')[0]
+            info[f] = {
+                'rev': (c.get('sha') or '')[:7],
+                'msg': msg[:90],
+                'when': (c.get('commit', {}).get('committer', {})
+                         .get('date') or ''),
+                'who': (c.get('commit', {}).get('author', {})
+                        .get('name') or ''),
+            }
+        except Exception:                                   # noqa: BLE001
+            continue
+    return info
+
+
+def fw_record(commits):
+    """Remember what was installed, so the panel can show installed revision
+    against latest without another round trip."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(DB)),
+                               'firmware.json'), 'w') as fh:
+            json.dump({'at': int(time.time()), 'version': VERSION,
+                       'commits': commits}, fh)
+    except OSError:
+        pass
+
+
+def fw_installed():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(DB)),
+                               'firmware.json')) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
 def fw_headers():
     h = {'User-Agent': 'nz-ingest'}
     if UPDATE_TOKEN:
@@ -347,7 +427,7 @@ def fw_compare(got):
     return out
 
 
-def fw_install(got):
+def fw_install(got, commits=None):
     """Write the verified files, keeping .bak copies, then exit so the
     container's restart policy brings the new code up."""
     for f, b in got.items():
@@ -360,6 +440,7 @@ def fw_install(got):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+    fw_record(commits or {})
     threading.Timer(1.2, lambda: os._exit(3)).start()
 
 
@@ -917,6 +998,9 @@ code{font-family:var(--mono);color:var(--cyan);word-break:break-all}
 <script>
 const E=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let view={kind:'home'};
+// Cached so a periodic re-render never flashes the loading placeholder, and
+// a signature of the state so an idle panel is not rebuilt for no reason.
+let fwCache=null, homeSig='', homeDrawn=false;
 async function api(u,o){const r=await fetch(u,o);return r.json()}
 
 /* ---- panel head ------------------------------------------------------- */
@@ -996,6 +1080,15 @@ function startWarp(cv){
   }
   requestAnimationFrame(frame);
 }
+function ago(iso){
+  if(!iso) return '';
+  const t=Date.parse(iso); if(isNaN(t)) return '';
+  const s=Math.max(0,(Date.now()-t)/1000|0);
+  if(s<90) return s+'s ago';
+  const m=s/60|0; if(m<90) return m+'m ago';
+  const h=m/60|0; if(h<36) return h+'h ago';
+  return (h/24|0)+'d ago';
+}
 function hms(s){s=Math.max(0,s|0);const h=s/3600|0,m=(s%3600)/60|0;
   return h?h+'h '+m+'m':(m?m+'m '+(s%60)+'s':s+'s')}
 function vpanel(){
@@ -1035,6 +1128,13 @@ async function jobTick(){
 async function home(){
   const d=await api('/api/state'), j=await api('/api/job');
   view={kind:'home'};
+  // Re-rendering an idle panel every few seconds made the firmware rack
+  // flash. Only redraw when something a person would notice has changed.
+  const sig=JSON.stringify([d.manifest,d.hashed,d.damaged,d.unreadable,
+    d.waiting,d.readonly,j.running,j.phase,j.note,
+    (d.batches||[]).map(b=>[b.id,b.state,b.note])]);
+  if(homeDrawn&&sig===homeSig&&!j.running) return;
+  homeSig=sig; homeDrawn=true;
   let h='';
   h+=`<div class=mods>
     ${mod(d.manifest.toLocaleString(),'files indexed','cy')}
@@ -1089,15 +1189,15 @@ async function home(){
 
 async function fw(check){
   const el=document.getElementById('fwrack'); if(!el) return;
+  if(!check&&fwCache) return fwRender(fwCache);
   if(check) el.innerHTML=`<div class=row><div class=grow><h3>Firmware</h3>
     <p>contacting update source&hellip;</p></div></div>`;
   let f; try{ f=await api('/api/firmware'+(check?'?check=1':'')); }
   catch(e){ return; }
-  const rows=CODE=>Object.entries(CODE).map(([k,v])=>
-    `<tr><td><code>${E(k)}</code></td><td>${v.bytes.toLocaleString()}</td>
-     <td class=d>${E(v.sha)}</td>${v.changed!==undefined
-       ?`<td>${v.changed?'<span class=pill style="color:var(--amber)">NEW</span>'
-                        :'<span class=d>same</span>'}</td>`:''}</tr>`).join('');
+  fwCache=f; fwRender(f);
+}
+function fwRender(f){
+  const el=document.getElementById('fwrack'); if(!el) return;
   let h=`<div class=row><div class=grow>
     <h3>Version ${E(f.version)}</h3>
     <p>${f.base?'Source '+E(f.base):
@@ -1111,22 +1211,34 @@ async function fw(check){
   </div>`;
   if(f.error) h+=`<div class="card alert" style="margin-top:12px">
     ${E(f.error)}</div>`;
+  const inst=(f.installed&&f.installed.commits)||{};
   h+=`<div class="scroll" style="margin-top:12px"><table>
-    <tr><th>file</th><th>bytes</th><th>sha256</th>${f.remote?'<th>remote</th>':''}</tr>
-    ${f.remote
-      ? Object.entries(f.remote).map(([k,v])=>
-        `<tr><td><code>${E(k)}</code></td><td>${v.bytes.toLocaleString()}</td>
-         <td class=d>${E(v.sha)}</td><td>${v.changed
-           ?'<span class=pill style="color:var(--amber)">NEW</span>'
-           :'<span class=d>same</span>'}</td></tr>`).join('')
-      : rows(f.local)}
+    <tr><th>file</th><th>bytes</th><th>rev</th><th>last change</th>
+    ${f.remote?'<th>state</th>':''}</tr>
+    ${(f.remote?Object.entries(f.remote):Object.entries(f.local)).map(([k,v])=>{
+      const c=(f.commits&&f.commits[k])||inst[k]||null;
+      const stale=c&&inst[k]&&f.commits&&f.commits[k]
+        &&inst[k].rev!==f.commits[k].rev;
+      return `<tr><td><code>${E(k)}</code>
+        <div class=d>${E(v.sha)}</div></td>
+        <td>${v.bytes.toLocaleString()}</td>
+        <td>${c?`<code>${E(c.rev)}</code>${stale
+          ?`<div class=d>have ${E(inst[k].rev)}</div>`:''}`:'<span class=d>—</span>'}</td>
+        <td>${c?`${E(c.msg||'')}<div class=d>${E(ago(c.when))}${
+          c.who?' · '+E(c.who):''}</div>`:'<span class=d>press check</span>'}</td>
+        ${f.remote?`<td>${v.changed
+          ?'<span class=pill style="color:var(--amber)">NEW</span>'
+          :'<span class=d>same</span>'}</td>`:''}</tr>`}).join('')}
     </table></div>`;
+  if(f.installed&&f.installed.at) h+=`<p class="note d" style="margin:10px 0 0">
+    Installed ${E(ago(new Date(f.installed.at*1000).toISOString()))} —
+    version ${E(f.installed.version||'?')}</p>`;
   if(f.remote&&!Object.values(f.remote).some(v=>v.changed))
     h+=`<p class="note d" style="margin:12px 0 0">Already up to date.</p>`;
   el.innerHTML=h;
 }
 async function dmg(){
-  const d=await api('/api/damaged'); view={kind:'damaged'};
+  const d=await api('/api/damaged'); view={kind:'damaged'}; homeDrawn=false;
   let h=`<h1>Files that need a look</h1>
   <p class=note>Archive files that did not pass a structural check. A check is
   a judgement, not a fact &mdash; some of these will be fine, and the verdict
@@ -1164,7 +1276,7 @@ async function dmg(){
 }
 
 async function show(id){
-  const d=await api('/api/batch/'+id); view={kind:'batch',id};
+  const d=await api('/api/batch/'+id); view={kind:'batch',id}; homeDrawn=false;
   let h=`<h1>Batch #${d.id}</h1><p class=note>${E(d.name)} &middot; ${E(d.state)}</p>
   <p><button onclick=home()>&larr; panel</button></p>`;
   if(d.blocked) h+=`<div class="card alert"><b>${d.counts.SKIP||0} file(s) could
@@ -1205,6 +1317,7 @@ async function act(what,id,action,val){
   const body=new URLSearchParams({what,id,action:action||'',approved:val??'',
     hash:(what==='scan_start'||what==='scan_fresh')&&val?'1':''});
   await api('/api/act',{method:'POST',body});
+  if(what==='fw_install'){ fwCache=null; homeDrawn=false; }
   setTimeout(()=>view.kind==='batch'?show(view.id)
     :(view.kind==='damaged'?dmg():home()),350);
 }
@@ -1249,12 +1362,14 @@ class Handler(BaseHTTPRequestHandler):
             info = {'version': VERSION, 'base': UPDATE_BASE,
                     'token': bool(UPDATE_TOKEN),
                     'writable': os.access(CODE_DIR, os.W_OK),
-                    'local': fw_local(), 'remote': None, 'error': None}
+                    'local': fw_local(), 'remote': None, 'error': None,
+                    'commits': {}, 'installed': fw_installed()}
             if want:
                 try:
                     info['remote'] = fw_compare(fw_fetch())
                 except Exception as exc:                    # noqa: BLE001
                     info['error'] = str(exc)
+                info['commits'] = fw_commits()
             return self._send(200, json.dumps(info))
         if u.path == '/api/job':
             el = time.time() - JOB['started'] if JOB['started'] else 0
@@ -1365,7 +1480,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise RuntimeError(
                             'the code directory is mounted read-only - drop '
                             'the ":ro" from the /app volume to allow updates')
-                    fw_install(fw_fetch())
+                    fw_install(fw_fetch(), fw_commits())
                 elif what == 'drop_now':
                     if walk_files(DROP, exclude_top=False):
                         nb = store.new_batch(
