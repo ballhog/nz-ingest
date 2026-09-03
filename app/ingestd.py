@@ -1536,8 +1536,59 @@ async function show(id){
 async function act(what,id,action,val){
   const body=new URLSearchParams({what,id,action:action||'',approved:val??'',
     hash:(what==='scan_start'||what==='scan_fresh')&&val?'1':''});
+  if(what==='fw_install'){
+    document.getElementById('app').innerHTML=`<div class=row style="justify-content:center;padding:60px 0">
+      <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
+        <defs>
+          <style>
+            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes pulse { 0%, 100% { r: 16px; opacity: 0.6; } 50% { r: 22px; opacity: 1; } }
+            .ring1 { animation: spin1 6s linear infinite; transform-origin: 110px 110px; }
+            .ring2 { animation: spin2 10s linear infinite; transform-origin: 110px 110px; }
+            .ring3 { animation: spin3 8s linear infinite; transform-origin: 110px 110px; }
+            .pulse { animation: pulse 2s ease-in-out infinite; }
+          </style>
+        </defs>
+        <g class="ring1">
+          <path d="M110,20 A90,90 0 0,1 184,55" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+          <path d="M56,184 A90,90 0 0,1 20,110" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+        </g>
+        <g class="ring2">
+          <path d="M200,110 A90,90 0 0,1 165,185" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
+          <path d="M55,55 A90,90 0 0,1 80,20" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
+        </g>
+        <g class="ring3">
+          <circle cx="110" cy="25" r="4" fill="#ff6666" filter="url(#glow)"/>
+          <circle cx="185" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
+          <circle cx="110" cy="195" r="4" fill="#ff6666" filter="url(#glow)"/>
+          <circle cx="25" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
+        </g>
+        <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
+        <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
+        <line x1="110" y1="65" x2="110" y2="40" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="155" y1="110" x2="180" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="110" y1="160" x2="110" y2="180" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="65" y1="110" x2="40" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="144" y1="76" x2="164" y2="56" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="156" y1="164" x2="176" y2="144" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="76" y1="156" x2="56" y2="176" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <line x1="64" y1="56" x2="44" y2="76" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
+        <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
+        <circle cx="110" cy="110" r="10" fill="#000"/>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+          <feMerge>
+            <feMergeNode in="coloredBlur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </svg>
+    </div><div class=row style="text-align:center;padding:20px"><p style="font:11px/1.5 var(--mono);color:#9aa2b4">Installing update and restarting...</p></div>`;
+  }
   await api('/api/act',{method:'POST',body});
-  if(what==='fw_install'){ fwCache=null; homeDrawn=false; }
+  if(what==='fw_install'){ fwCache=null; homeDrawn=false; return; }
   setTimeout(()=>view.kind==='batch'?show(view.id)
     :(view.kind==='damaged'?dmg():home()),350);
 }
