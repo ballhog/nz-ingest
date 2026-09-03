@@ -1,0 +1,77 @@
+# Continuous Integration Workflow
+# Runs every time you push code to GitHub
+# Validates the Helm chart and Python code
+
+name: CI - Validate Helm Chart
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Chart.yaml'
+      - 'values.yaml'
+      - 'templates/**'
+      - 'app/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Helm Chart
+    
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      # Step 2: Set up Helm
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      # Step 3: Validate the Helm chart
+      - name: Lint Helm chart
+        run: helm lint .
+      
+      # Step 4: Template the chart (dry-run)
+      - name: Template chart
+        run: helm template nz-ingest . --values values.yaml
+      
+      # Step 5: Set up Python for app validation
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      
+      # Step 6: Check Python syntax
+      - name: Validate Python files
+        run: |
+          python -m py_compile app/ingestd.py
+          python -m py_compile app/mediacheck.py
+          python -m py_compile app/store.py
+          echo "✓ All Python files are syntactically valid"
+
+  test-helm:
+    runs-on: ubuntu-latest
+    name: Test Helm Chart Values
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Validate values.yaml
+        run: |
+          # Simple YAML validation
+          python -c "import yaml; yaml.safe_load(open('values.yaml'))"
+          echo "✓ values.yaml is valid YAML"
+      
+      - name: Check required fields
+        run: |
+          # Verify critical fields exist in Chart.yaml
+          grep -q "name: nz-ingest" Chart.yaml
+          grep -q "version:" Chart.yaml
+          grep -q "appVersion:" Chart.yaml
+          echo "✓ All required Chart.yaml fields present"
