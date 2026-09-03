@@ -2,8 +2,8 @@ apiVersion: v2
 name: nz-ingest
 description: Smart photo ingest appliance for TrueNAS. Drop files, review the plan, approve moves.
 type: application
-version: 1.6.8
-appVersion: "1.6.8"
+version: 1.6.9
+appVersion: "1.6.9"
 keywords:
   - photo
   - ingest
