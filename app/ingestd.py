@@ -59,7 +59,7 @@ PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
 
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 # Where the update button pulls from - a raw-file base URL, e.g.
 #   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
 # Left empty the panel simply reports that no source is configured. Nothing
@@ -150,15 +150,25 @@ def sample_stats():
     global _last_stat
     stats = {'cpu': 0.0, 'mem_mb': 0, 'io_mb': 0.0}
     try:
-        # CPU: /proc/self/stat gives utime+stime in ticks; divide by elapsed
-        # seconds to get %. This is process CPU, not system-wide.
+        # CPU: /proc/self/stat gives utime+stime in ticks. To get %, we need
+        # to track the delta and divide by elapsed wall time.
         with open('/proc/self/stat') as f:
             parts = f.read().split()
             utime, stime = int(parts[13]), int(parts[14])
             cpu_ticks = utime + stime
-        # Rough conversion: assume 100 ticks/sec (typical on modern Linux)
-        cpu_pct = min(100.0, cpu_ticks * 0.5)  # scaled to %
-        stats['cpu'] = round(cpu_pct, 1)
+        now = time.time()
+        if _last_stat and _last_stat.get('cpu_ticks') is not None:
+            delta_ticks = cpu_ticks - _last_stat['cpu_ticks']
+            elapsed = now - _last_stat['time']
+            if elapsed > 0:
+                # Assume 100 ticks/sec (typical on Linux); compare to 1 core
+                # at 100%. Divide by elapsed to get utilization percentage.
+                cpu_pct = (delta_ticks / 100.0) / elapsed * 100.0
+                stats['cpu'] = round(min(100.0, cpu_pct), 1)
+        if _last_stat is None:
+            _last_stat = {}
+        _last_stat['cpu_ticks'] = cpu_ticks
+        _last_stat['time'] = now
     except:
         pass
     try:
@@ -191,7 +201,10 @@ def sample_stats():
                 elapsed = time.time() - _last_stat['time']
                 if elapsed > 0:
                     stats['io_mb'] = round(delta / (1024*1024*elapsed), 1)
-            _last_stat = {'io_bytes': io_bytes, 'time': time.time()}
+        # Update shared state (don't overwrite, merge)
+        if _last_stat is None:
+            _last_stat = {}
+        _last_stat['io_bytes'] = io_bytes
     except:
         pass
     return stats
@@ -950,20 +963,35 @@ a{color:inherit;text-decoration:none}
 .vp .meta{font:11px/1.5 var(--mono);color:#9aa2b4}
 .vp .act{position:absolute;right:14px;bottom:13px}
 
-/* ---- status readout (nerd panel) ---- */
-.readout{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
-  border-radius:8px;padding:12px 17px;margin:10px 0;
+/* ---- in-flight unified panel ---- */
+.inflight{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:14px 16px;margin:10px 0;
   box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
              0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
-.readout h4{margin:0 0 6px;font:600 10px/1 var(--disp);letter-spacing:.16em;
-  text-transform:uppercase;color:var(--amber)}
-.readout .stat{display:grid;grid-template-columns:100px 1fr;gap:8px;margin:4px 0;
-  font:11px/1.3 var(--mono);color:#9aa2b4}
-.readout .stat-val{color:var(--cyan);font-weight:600}
-.readout .stat-label{color:#666}
-.readout .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
+.inflight .prog{margin-bottom:10px}
+.inflight .ph{font:9px/1 var(--mono);letter-spacing:.22em;color:var(--cyan);
+  text-transform:uppercase}
+.inflight .big{font:600 28px/1 var(--disp);letter-spacing:-.02em;margin:4px 0 2px;
+  color:var(--white)}
+.inflight .meta{font:11px/1.5 var(--mono);color:#9aa2b4;margin-top:2px}
+.inflight .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
   border-radius:4px;padding:6px 8px;margin:8px 0;font:10px/1.4 var(--mono);
   color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inflight .stats-head{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--amber);
+  text-transform:uppercase;margin:8px 0 6px}
+.inflight .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.inflight .stat{display:flex;flex-direction:column;gap:3px}
+.inflight .label{font:9px/1 var(--mono);color:#666;text-transform:uppercase;
+  letter-spacing:.08em}
+.inflight .val{font:600 13px/1 var(--mono);color:var(--cyan)}
+.inflight .bar{height:4px;background:rgba(0,0,0,.5);border:1px solid #333;
+  border-radius:2px;overflow:hidden;--w:0%}
+.inflight .bar:before{content:"";display:block;height:100%;background:
+  linear-gradient(90deg,#4dd0ff,#00d9ff);width:var(--w);transition:width .15s ease-out}
+.inflight #speedbar:before{background:linear-gradient(90deg,#4dd0ff,#00d9ff)}
+.inflight #cpubar:before{background:linear-gradient(90deg,#ffaa00,#ff8800)}
+.inflight #membar:before{background:linear-gradient(90deg,#ff6b6b,#ff4444)}
+.inflight #iobar:before{background:linear-gradient(90deg,#66ff99,#44ff77)}
 
 /* ---- controls ---- */
 .rack{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
@@ -1170,56 +1198,80 @@ function hms(s){s=Math.max(0,s|0);const h=s/3600|0,m=(s%3600)/60|0;
   return h?h+'h '+m+'m':(m?m+'m '+(s%60)+'s':s+'s')}
 function vpanel(){
   return `<div class=vp><canvas id=warp></canvas>
-    <div class=ov id=jobtxt></div>
     <div class=act><button class=hot onclick="act('scan_stop',0)">halt</button></div>
   </div>
-  <div class=readout id=readout>
-    <h4>System Status</h4>
+  <div class=inflight>
+    <div class=prog>
+      <div class=ph id=phase>SPINNING UP</div>
+      <div class=big id=progress>—</div>
+      <div class=meta id=meta></div>
+    </div>
     <div class=file-box id=curfile></div>
-    <div class=stat><div class=stat-label>Speed</div><div class=stat-val id=speed>—</div></div>
-    <div class=stat><div class=stat-label>CPU</div><div class=stat-val id=cpustat>—</div></div>
-    <div class=stat><div class=stat-label>Memory</div><div class=stat-val id=memstat>—</div></div>
-    <div class=stat><div class=stat-label>Disk I/O</div><div class=stat-val id=iostat>—</div></div>
+    <div class=stats-head>SYSTEM STATUS</div>
+    <div class=stats>
+      <div class=stat><div class=label>Speed</div><div class=val id=speed>—</div><div class=bar id=speedbar></div></div>
+      <div class=stat><div class=label>CPU</div><div class=val id=cpustat>—</div><div class=bar id=cpubar></div></div>
+      <div class=stat><div class=label>Memory</div><div class=val id=memstat>—</div><div class=bar id=membar></div></div>
+      <div class=stat><div class=label>I/O</div><div class=val id=iostat>—</div><div class=bar id=iobar></div></div>
+    </div>
   </div>`;
-}
-function jobText(j){
-  const b=[];
-  if(j.rate) b.push(Math.round(j.rate)+' files/sec');
-  if(j.eta) b.push(hms(j.eta)+' remaining');
-  if(j.skipped) b.push(j.skipped.toLocaleString()+' unchanged');
-  if(j.hash) b.push('hashing');
-  return `<div class=ph>${E(j.phase)}</div>
-  <div class=big>${j.total?j.done.toLocaleString()+' / '+j.total.toLocaleString()
-    :j.done.toLocaleString()}${j.pct?'  '+j.pct+'%':''}</div>
-  <div class=meta>${E(b.join('  ·  ')||'spinning up')}</div>`;
 }
 async function jobTick(){
   let j,d; try{ j=await api('/api/job'); d=await api('/api/state'); }catch(e){return}
   warpRate=j.running?(j.rate||0):0;
-  // Zero while walking the tree - nothing is being read, and the still field
-  // should say so. Once inspecting, a floor so it reads as alive even before
-  // the first rate sample lands.
   const walking=/walk|manifest/i.test(j.phase||'');
   warpV=!j.running?0:(walking?0:Math.max(0.14,Math.min(1,warpRate/600)));
   setHead(d,j);
-  const box=document.getElementById('jobtxt');
-  if(j.running&&view.kind==='home'&&!box) return home();
-  if(!j.running&&box) return home();
-  if(j.running&&box){
-    box.innerHTML=jobText(j);
-    startWarp(document.getElementById('warp'));
-    // Update the status readout panel with file, CPU, mem, I/O.
+  // Check if in-flight panel exists (scan running)
+  const inflight=document.getElementById('phase');
+  if(j.running&&view.kind==='home'&&!inflight) return home();
+  if(!j.running&&inflight) return home();
+  if(j.running&&inflight){
+    // Update progress section
+    const ph=document.getElementById('phase');
+    if(ph) ph.textContent=E(j.phase||'').toUpperCase();
+    const prog=document.getElementById('progress');
+    if(prog){
+      let ptext=j.total?j.done.toLocaleString()+' / '+j.total.toLocaleString()
+        :j.done.toLocaleString();
+      if(j.pct) ptext+=' '+j.pct+'%';
+      prog.textContent=ptext;
+    }
+    const meta=document.getElementById('meta');
+    if(meta){
+      const parts=[];
+      if(j.rate) parts.push(Math.round(j.rate)+' files/sec');
+      if(j.eta) parts.push(hms(j.eta)+' remaining');
+      if(j.skipped) parts.push(j.skipped.toLocaleString()+' unchanged');
+      if(j.hash) parts.push('hashing');
+      meta.textContent=parts.join('  ·  ');
+    }
+    // Update current file and system stats
     const f=document.getElementById('curfile');
     if(f) f.textContent=j.file||'(scanning)';
     const speed=document.getElementById('speed');
-    if(speed) speed.textContent=Math.round(j.rate||0)+' files/sec';
+    const speedVal=Math.round(j.rate||0);
+    if(speed) speed.textContent=speedVal+' files/sec';
     const cpustat=document.getElementById('cpustat');
-    if(cpustat) cpustat.textContent=(j.cpu||0).toFixed(1)+'%';
+    const cpuVal=j.cpu||0;
+    if(cpustat) cpustat.textContent=cpuVal.toFixed(1)+'%';
     const memstat=document.getElementById('memstat');
-    if(memstat) memstat.textContent=(j.mem_mb||0)+' MB';
+    const memVal=j.mem_mb||0;
+    if(memstat) memstat.textContent=memVal+' MB';
     const iostat=document.getElementById('iostat');
-    if(iostat) iostat.textContent=(j.io_mb||0).toFixed(1)+' MB/s';
+    const ioVal=j.io_mb||0;
+    if(iostat) iostat.textContent=ioVal.toFixed(1)+' MB/s';
+    // Set bar widths (speed: 0-120 files/sec, cpu: 0-100%, mem: scale to reasonable max, io: 0-300 MB/s)
+    setBarWidth('speedbar', Math.min(100, speedVal/120*100));
+    setBarWidth('cpubar', cpuVal);
+    setBarWidth('membar', Math.min(100, memVal/512*100));
+    setBarWidth('iobar', Math.min(100, ioVal/300*100));
+    startWarp(document.getElementById('warp'));
   }
+}
+function setBarWidth(id, pct){
+  const bar=document.getElementById(id);
+  if(bar) bar.style.setProperty('--w',Math.max(0,Math.min(100,pct))+'%');
 }
 
 /* ---- views ------------------------------------------------------------ */
