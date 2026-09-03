@@ -979,6 +979,27 @@ a{color:inherit;text-decoration:none}
   color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inflight .stats-head{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--amber);
   text-transform:uppercase;margin:8px 0 6px}
+/* ---- telemetry traces ----
+   Four rolling channels over a graticule, sitting above the four static
+   bars they are meant to replace. A bar says what is happening now; a
+   trace says what changed, which is the question you actually have when
+   throughput falls off a cliff and you need to know whether it went I/O
+   bound or CPU bound. Cyan is the healthy palette - red is spent only on
+   real damage, one mark per condemned file at the point it was found. */
+.inflight .trace{position:relative;margin:2px 0 8px;border:1px solid #000;
+  border-radius:6px;overflow:hidden;background:#05050a;
+  box-shadow:0 3px 14px rgba(0,0,0,.8) inset,
+             0 0 30px rgba(58,208,255,.05) inset,0 0 0 1px #1c1c24}
+.inflight .trace:before{content:"";position:absolute;inset:4px;border-radius:3px;
+  border:1px solid rgba(255,255,255,.035);pointer-events:none}
+.inflight .trace canvas{display:block;width:100%;height:120px}
+.inflight .trlegend{display:flex;gap:15px;flex-wrap:wrap;margin:0 0 10px;
+  font:9px/1.4 var(--mono);letter-spacing:.12em;color:var(--faint);
+  text-transform:uppercase}
+.inflight .trlegend b{color:var(--dim);font-weight:400}
+.inflight .trlegend s{width:8px;height:2px;display:inline-block;margin-right:5px;
+  text-decoration:none;vertical-align:2px}
+
 .inflight .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .inflight .stat{display:flex;flex-direction:column;gap:3px}
 .inflight .label{font:9px/1 var(--mono);color:#666;text-transform:uppercase;
@@ -1188,6 +1209,118 @@ function mod(n,l,cls,click){
     <b>${n}</b><span>${E(l)}</span></div>`;
 }
 
+/* ---- telemetry traces -------------------------------------------------- */
+/* Channel order is paint order: the one you care about most is drawn last so
+   the others cannot bury it. Each channel autoscales against its own rolling
+   peak with a floor, because a scan that never exceeds 4 MB/s should still
+   show its shape rather than a flat line along the bottom. */
+const TR_CH=[
+  {k:'mem',  col:'#5d8fa8', w:1.2, floor:128, fmt:v=>Math.round(v)+' mb'},
+  {k:'io',   col:'#8fd8f2', w:1.3, floor:10,  fmt:v=>v.toFixed(1)+' mb/s'},
+  {k:'cpu',  col:'#e8f6ff', w:1.3, floor:100, fmt:v=>v.toFixed(1)+'%'},
+  {k:'rate', col:'#3ad0ff', w:2.0, floor:10,  fmt:v=>Math.round(v)+'/s'},
+];
+const TR={cap:240, buf:[], on:false, dmg:null, found:0};
+function traceSample(j,d){
+  const tot=(d.damaged|0)+(d.unreadable|0);
+  /* The first sample of a scan only establishes a baseline. The manifest
+     already carries damage from previous runs, and counting all of it as
+     found-now would stripe the panel red at t=0. */
+  const hit=TR.dmg!==null&&tot>TR.dmg;
+  if(hit) TR.found+=tot-TR.dmg;
+  TR.dmg=tot;
+  TR.buf.push({t:Date.now(), rate:j.rate||0, cpu:j.cpu||0,
+               mem:j.mem_mb||0, io:j.io_mb||0, hit:hit});
+  if(TR.buf.length>TR.cap) TR.buf.shift();
+  traceLabels();
+}
+/* home() rebuilds the whole in-flight panel every 7s while a scan runs, which
+   resets these back to their placeholder markup. Repainting them from the
+   buffer whenever the canvas is (re)created closes that gap - otherwise the
+   readouts blank for up to a second on every redraw. */
+function traceLabels(){
+  if(!TR.buf.length) return;
+  const last=TR.buf[TR.buf.length-1];
+  for(const c of TR_CH){
+    const el=document.getElementById('tr-'+c.k);
+    if(el) el.textContent=c.fmt(last[c.k]);
+  }
+  const dm=document.getElementById('tr-dmg');
+  if(dm) dm.textContent=TR.found.toLocaleString();
+}
+function startTrace(cv){
+  if(!cv) return;
+  traceLabels();
+  if(cv.__on) return; cv.__on=true;
+  const ctx=cv.getContext('2d');
+  const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const dpr=Math.min(2,window.devicePixelRatio||1);
+  let w,h;
+  const size=()=>{w=cv.width=cv.clientWidth*dpr; h=cv.height=cv.clientHeight*dpr};
+  size(); try{new ResizeObserver(size).observe(cv)}catch(e){}
+  function frame(){
+    if(!cv.isConnected){cv.__on=false;return}
+    ctx.fillStyle='#05050a'; ctx.fillRect(0,0,w,h);
+    const step=w/(TR.cap-1);
+    /* The graticule stays put. Sliding it along with the traces looks right
+       for a fraction of a second and then snaps back a whole division once a
+       second, which reads as a stutter. */
+    ctx.lineWidth=dpr; ctx.strokeStyle='rgba(58,208,255,.055)'; ctx.beginPath();
+    for(let x=w;x>=0;x-=step*8){ ctx.moveTo(x,0); ctx.lineTo(x,h); }
+    for(let i=1;i<6;i++){ const y=Math.round(h*i/6); ctx.moveTo(0,y); ctx.lineTo(w,y); }
+    ctx.stroke();
+    ctx.strokeStyle='rgba(58,208,255,.10)'; ctx.beginPath();
+    ctx.moveTo(0,Math.round(h/2)); ctx.lineTo(w,Math.round(h/2)); ctx.stroke();
+
+    const b=TR.buf, n=b.length;
+    if(n<2){ requestAnimationFrame(frame); return; }
+    /* Samples land at 1 Hz. Sliding by the fraction of a second elapsed since
+       the last one turns a once-a-second jump into a continuous drift: when
+       the next sample arrives n is unchanged and frac resets, so every point
+       moves left by exactly one step. This only smooths where existing points
+       are drawn - no values are invented between them. */
+    const frac=still?0:Math.max(0,Math.min(1,(Date.now()-b[n-1].t)/1000));
+    const xOf=i=>w-(n-1-i+frac)*step;
+
+    for(let i=0;i<n;i++){
+      if(!b[i].hit) continue;
+      const x=xOf(i);
+      const g=ctx.createLinearGradient(0,0,0,h);
+      g.addColorStop(0,'rgba(255,59,59,.05)'); g.addColorStop(1,'rgba(255,59,59,.45)');
+      ctx.strokeStyle=g; ctx.lineWidth=dpr*1.3;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+    }
+
+    const pad=h*0.10;
+    for(const c of TR_CH){
+      let mx=c.floor;
+      for(let i=0;i<n;i++) if(b[i][c.k]>mx) mx=b[i][c.k];
+      const pts=[];
+      for(let i=0;i<n;i++)
+        pts.push([xOf(i), h-pad-(h-2*pad)*Math.min(1,b[i][c.k]/mx)]);
+      /* Three cheap strokes rather than shadowBlur, which is applied per
+         stroke and is the one thing here that would actually cost frames. */
+      const draw=(lw,al)=>{
+        ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+        for(let i=1;i<n-1;i++){
+          const mxp=(pts[i][0]+pts[i+1][0])/2, myp=(pts[i][1]+pts[i+1][1])/2;
+          ctx.quadraticCurveTo(pts[i][0],pts[i][1],mxp,myp);
+        }
+        ctx.lineTo(pts[n-1][0],pts[n-1][1]);
+        ctx.strokeStyle=c.col; ctx.globalAlpha=al;
+        ctx.lineWidth=dpr*lw; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.stroke();
+      };
+      draw(c.w*3.4,0.09); draw(c.w*1.9,0.18); draw(c.w,1);
+      ctx.globalAlpha=1;
+      const p=pts[n-1];
+      ctx.fillStyle=c.col; ctx.beginPath();
+      ctx.arc(p[0],p[1],dpr*c.w*1.15,0,6.283); ctx.fill();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
 /* ---- accretion disc --------------------------------------------------- */
 let warpRate=0, warpV=0;
 function startWarp(cv){
@@ -1257,6 +1390,14 @@ function vpanel(){
     </div>
     <div class=file-box id=curfile></div>
     <div class=stats-head>SYSTEM STATUS</div>
+    <div class=trace><canvas id=trace></canvas></div>
+    <div class=trlegend>
+      <span><s style="background:#3ad0ff"></s>rate <b id=tr-rate>&mdash;</b></span>
+      <span><s style="background:#e8f6ff"></s>cpu <b id=tr-cpu>&mdash;</b></span>
+      <span><s style="background:#8fd8f2"></s>i/o <b id=tr-io>&mdash;</b></span>
+      <span><s style="background:#5d8fa8"></s>mem <b id=tr-mem>&mdash;</b></span>
+      <span><s style="background:#ff3b3b"></s>damage <b id=tr-dmg>0</b></span>
+    </div>
     <div class=stats>
       <div class=stat><div class=label>Speed</div><div class=val id=speed>—</div><div class=bar id=speedbar></div></div>
       <div class=stat><div class=label>CPU</div><div class=val id=cpustat>—</div><div class=bar id=cpubar></div></div>
@@ -1270,6 +1411,10 @@ async function jobTick(){
   warpRate=j.running?(j.rate||0):0;
   const walking=/walk|manifest/i.test(j.phase||'');
   warpV=!j.running?0:(walking?0:Math.max(0.14,Math.min(1,warpRate/600)));
+  // A new scan starts a new trace. Carrying the previous run's history over
+  // would splice two unrelated timelines into one curve.
+  if(j.running&&!TR.on){ TR.on=true; TR.buf.length=0; TR.dmg=null; TR.found=0; }
+  else if(!j.running){ TR.on=false; }
   setHead(d,j);
   // Check if in-flight panel exists (scan running)
   const inflight=document.getElementById('phase');
@@ -1316,6 +1461,8 @@ async function jobTick(){
     setBarWidth('cpubar', cpuVal);
     setBarWidth('membar', Math.min(100, memVal/512*100));
     setBarWidth('iobar', Math.min(100, ioVal/300*100));
+    traceSample(j,d);
+    startTrace(document.getElementById('trace'));
     startWarp(document.getElementById('warp'));
   }
 }
@@ -1396,6 +1543,7 @@ async function home(){
     const box=document.getElementById('jobtxt');
     if(box) box.innerHTML=jobText(j);
   }
+  startTrace(document.getElementById('trace'));
   startWarp(document.getElementById('warp'));
 }
 
