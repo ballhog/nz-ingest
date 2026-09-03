@@ -187,6 +187,46 @@ class Store(object):
             out[top] = out.get(top, 0) + 1
         return sorted(out.items(), key=lambda kv: -kv[1])[:limit]
 
+
+
+    def archive_stats(self, limit=12):
+        """Total archive size, format distribution, camera models, and sample
+        EXIF data for the UI display."""
+        # Total size
+        total_size = self.db.execute(
+            'SELECT COALESCE(SUM(size), 0) s FROM files WHERE verdict NOT IN ("ERROR")').fetchone()['s']
+
+        # Format distribution
+        formats = {}
+        for r in self.db.execute('SELECT fmt, COUNT(*) c FROM files WHERE fmt IS NOT NULL GROUP BY fmt ORDER BY c DESC'):
+            formats[r['fmt']] = r['c']
+
+        # Camera models (top 5)
+        models = []
+        for r in self.db.execute('SELECT model, COUNT(*) c FROM files WHERE model IS NOT NULL GROUP BY model ORDER BY c DESC LIMIT 5'):
+            models.append({'model': r['model'], 'count': r['c']})
+
+        # Sample EXIF data from recent files (for rotating display)
+        samples = []
+        for r in self.db.execute(
+            'SELECT path, size, fmt, model, dt FROM files WHERE model IS NOT NULL AND dt IS NOT NULL '
+            'ORDER BY added_at DESC LIMIT ?', (limit,)):
+            samples.append({
+                'path': r['path'],
+                'size': r['size'],
+                'fmt': r['fmt'],
+                'model': r['model'],
+                'dt': r['dt']
+            })
+
+        return {
+            'total_size': total_size,
+            'file_count': self.file_count(),
+            'formats': formats,
+            'models': models,
+            'samples': samples
+        }
+
     # -------------------------------------------------------- batches
 
     def new_batch(self, name, src_root):

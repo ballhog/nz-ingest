@@ -1628,6 +1628,9 @@ class Handler(BaseHTTPRequestHandler):
                 'progress': progress,
                 'batches': [dict(b) for b in store.batches(25)],
             }))
+        if u.path == '/api/archive-stats':
+            stats = store.archive_stats()
+            return self._send(200, json.dumps(stats))
         if u.path == '/api/firmware':
             want = parse_qs(u.query).get('check')
             info = {'version': VERSION, 'base': UPDATE_BASE,
