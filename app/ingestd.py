@@ -1,4 +1,4 @@
-https://raw.githubusercontent.com/ballhog/nz-ingest/main/app/env python3
+https://raw.githubusercontent.com/ballhog/nz-ingest/main/app
 """
 nz-ingest - drop files in a folder, review the plan, then it sorts them.
 
