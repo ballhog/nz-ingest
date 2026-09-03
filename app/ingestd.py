@@ -1282,7 +1282,7 @@ async function home(){
   // Re-rendering an idle panel every few seconds made the firmware rack
   // flash. Only redraw when something a person would notice has changed.
   const sig=JSON.stringify([d.manifest,d.hashed,d.damaged,d.unreadable,
-    d.waiting,d.readonly,j.running,j.phase,j.note,
+    d.waiting,d.readonly,j.running,j.note,
     (d.batches||[]).map(b=>[b.id,b.state,b.note])]);
   if(homeDrawn&&sig===homeSig&&(!j.running||document.getElementById('phase'))) return;
   homeSig=sig; homeDrawn=true;
@@ -1328,8 +1328,8 @@ async function home(){
   // DOM writes of different heights is exactly what "flickers and shrinks"
   // means, and it happened on every redraw, not just the first. Fetch (or
   // reuse the cache) *before* building this section so the whole panel goes
-  // into the DOM once, at its final height.
-  if(!fwCache){ try{ fwCache=await api('/api/firmware'); }catch(e){ fwCache=null; } }
+  // into the DOM once, at its final height. Auto-check for updates on first load.
+  if(!fwCache){ try{ fwCache=await api('/api/firmware?check=1'); }catch(e){ fwCache=null; } }
   h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>${fwCache?fwHtml(fwCache):
     `<div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
     <p>loading&hellip;</p></div></div>`}</div>`;
