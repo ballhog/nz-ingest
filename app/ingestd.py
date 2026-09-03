@@ -59,7 +59,7 @@ PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
 
-VERSION = '1.6.0'
+VERSION = '1.6.1'
 # Where the update button pulls from - a raw-file base URL, e.g.
 #   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
 # Left empty the panel simply reports that no source is configured. Nothing
@@ -968,12 +968,12 @@ a{color:inherit;text-decoration:none}
   border-radius:8px;padding:14px 16px;margin:10px 0;
   box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
              0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
-.inflight .prog{margin-bottom:10px}
-.inflight .ph{font:9px/1 var(--mono);letter-spacing:.22em;color:var(--cyan);
-  text-transform:uppercase}
-.inflight .big{font:600 28px/1 var(--disp);letter-spacing:-.02em;margin:4px 0 2px;
-  color:var(--white)}
-.inflight .meta{font:11px/1.5 var(--mono);color:#9aa2b4;margin-top:2px}
+.inflight .prog{margin-bottom:10px;display:grid;gap:4px}
+.inflight .prog .row{display:grid;grid-template-columns:80px 1fr;gap:12px;
+  align-items:baseline;font:11px/1.5 var(--mono)}
+.inflight .prog .label{color:#666;text-transform:uppercase;letter-spacing:.08em;
+  font-size:9px}
+.inflight .prog .val{color:var(--cyan);font-weight:600}
 .inflight .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
   border-radius:4px;padding:6px 8px;margin:8px 0;font:10px/1.4 var(--mono);
   color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1202,9 +1202,11 @@ function vpanel(){
   </div>
   <div class=inflight>
     <div class=prog>
-      <div class=ph id=phase>SPINNING UP</div>
-      <div class=big id=progress>—</div>
-      <div class=meta id=meta></div>
+      <div class=row><div class=label>Phase</div><div class=val id=phase>—</div></div>
+      <div class=row><div class=label>Total</div><div class=val id=prog-total>—</div></div>
+      <div class=row><div class=label>Done</div><div class=val id=prog-done>—</div></div>
+      <div class=row><div class=label>Speed</div><div class=val id=prog-speed>—</div></div>
+      <div class=row><div class=label>ETA</div><div class=val id=prog-eta>—</div></div>
     </div>
     <div class=file-box id=curfile></div>
     <div class=stats-head>SYSTEM STATUS</div>
@@ -1227,24 +1229,23 @@ async function jobTick(){
   if(j.running&&view.kind==='home'&&!inflight) return home();
   if(!j.running&&inflight) return home();
   if(j.running&&inflight){
-    // Update progress section
+    // Update progress section rows
     const ph=document.getElementById('phase');
     if(ph) ph.textContent=E(j.phase||'').toUpperCase();
-    const prog=document.getElementById('progress');
-    if(prog){
-      let ptext=j.total?j.done.toLocaleString()+' / '+j.total.toLocaleString()
-        :j.done.toLocaleString();
-      if(j.pct) ptext+=' '+j.pct+'%';
-      prog.textContent=ptext;
+    const progTotal=document.getElementById('prog-total');
+    if(progTotal) progTotal.textContent=j.total?j.total.toLocaleString():'—';
+    const progDone=document.getElementById('prog-done');
+    if(progDone){
+      let dtext=j.done.toLocaleString();
+      if(j.pct) dtext+=' ('+j.pct+'%)';
+      progDone.textContent=dtext;
     }
-    const meta=document.getElementById('meta');
-    if(meta){
-      const parts=[];
-      if(j.rate) parts.push(Math.round(j.rate)+' files/sec');
-      if(j.eta) parts.push(hms(j.eta)+' remaining');
-      if(j.skipped) parts.push(j.skipped.toLocaleString()+' unchanged');
-      if(j.hash) parts.push('hashing');
-      meta.textContent=parts.join('  ·  ');
+    const progSpeed=document.getElementById('prog-speed');
+    if(progSpeed) progSpeed.textContent=Math.round(j.rate||0)+' files/sec';
+    const progEta=document.getElementById('prog-eta');
+    if(progEta){
+      if(j.eta) progEta.textContent=hms(j.eta)+' remaining';
+      else progEta.textContent='—';
     }
     // Update current file and system stats
     const f=document.getElementById('curfile');
