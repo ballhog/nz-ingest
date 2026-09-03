@@ -1,0 +1,101 @@
+How to make changes
+
+
+
+## 🎯 Example Workflow: Making Your First Release
+
+**Step 1:** Update CHANGELOG.md
+```markdown
+## [1.6.2] - 2026-09-03
+
+### Added
+- New feature X
+- Bug fix Y
+```
+
+**Step 2:** Commit changes
+```bash
+git add CHANGELOG.md app/ingestd.py
+git commit -m "Add new feature X"
+git push origin main
+```
+
+**Step 3:** Create and push a release tag
+```bash
+git tag v1.6.2
+git push origin v1.6.2
+```
+
+**Step 4:** GitHub Actions automatically:
+- Validates everything ✅
+- Creates a release on GitHub
+- Announces it to TrueNAS users
+
+---
+
+## 🔍 Where to Watch It Happen
+
+Go to: **https://github.com/ballhog/nz-ingest/actions**
+
+
+
+
+Let me set up the CI/CD pipeline for you. I'll create GitHub Actions workflows that will automate testing and releases.Now let me create the CI workflow (runs tests on every push):Now let me create the Release workflow (runs when you create a tag):Perfect! Now let me commit and push these workflows to GitHub:Perfect! Your CI/CD workflows are committed and ready. Just push from your machine with:
+
+```bash
+git push origin main
+```
+
+Now let me show you how to use these workflows:
+
+## 📚 CI/CD Learning Guide
+
+### **Workflow 1: CI (Continuous Integration)**
+**File:** `.github/workflows/ci.yml`
+
+**What it does:**
+- Runs automatically every time you push code
+- Validates your Helm chart syntax
+- Checks your Python code for errors
+- Verifies all required fields exist
+
+**When it runs:**
+- Every push to `main` branch
+- Changes to: `Chart.yaml`, `values.yaml`, `templates/`, `app/`
+
+**How to see it:**
+1. Push your code
+2. Go to GitHub repo → **Actions** tab
+3. Watch it run in real-time ✅
+
+---
+
+### **Workflow 2: Release (Continuous Deployment)**
+**File:** `.github/workflows/release.yml`
+
+**What it does:**
+- Automatically creates a GitHub Release
+- Generates release notes from CHANGELOG.md
+- Makes it available in your TrueNAS catalog
+
+**How to trigger it:**
+When you want to release version 1.6.2:
+
+```bash
+# 1. Update your code and CHANGELOG.md
+# (Edit ingestd.py, update CHANGELOG.md with new version section)
+
+# 2. Create a git tag
+git tag v1.6.2
+
+# 3. Push the tag
+git push origin v1.6.2
+```
+
+**What happens automatically:**
+✅ GitHub Action runs  
+✅ Creates a GitHub Release  
+✅ Generates release notes  
+✅ TrueNAS users see "Update Available"
+
+---
