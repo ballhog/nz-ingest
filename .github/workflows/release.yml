@@ -1,13 +1,12 @@
 # Continuous Deployment Workflow
 # Runs when you create a git tag (e.g., git tag v1.6.2)
-# Automatically creates a GitHub release
 
 name: Release - Create GitHub Release
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.6.2, v2.0.0
+      - 'v*.*.*'
 
 jobs:
   create-release:
@@ -15,55 +14,20 @@ jobs:
     name: Create Release
     
     steps:
-      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
       
-      # Step 2: Extract version from tag
       - name: Extract version
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Creating release for version: $VERSION"
       
-      # Step 3: Create Release using GitHub CLI (more reliable)
-      - name: Create GitHub Release
+      # Simple, reliable release creation using GitHub CLI
+      - name: Create Release
         run: |
-          # Use GitHub CLI which is built-in and more reliable
           gh release create "${{ steps.version.outputs.version }}" \
             --title "nz-ingest ${{ steps.version.outputs.version }}" \
-            --notes "Smart photo ingest appliance for TrueNAS SCALE
-
-## Installation via TrueNAS
-
-1. Go to **Apps → Discover**
-2. Click **+ Add Catalog**
-3. Enter:
-   - **Name:** nz-ingest
-   - **Repository:** https://github.com/ballhog/nz-ingest
-   - **Branch:** main
-4. Search for 'nz-ingest' and click **Install**
-
-## What's New
-
-See [CHANGELOG.md](https://github.com/ballhog/nz-ingest/blob/main/CHANGELOG.md) for details."
+            --notes "See CHANGELOG.md for details on this release."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  verify-changelog:
-    runs-on: ubuntu-latest
-    name: Verify CHANGELOG Updated
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Check CHANGELOG has version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          if grep -q "$VERSION" CHANGELOG.md; then
-            echo "✓ CHANGELOG.md includes $VERSION"
-          else
-            echo "⚠ Warning: CHANGELOG.md does not mention $VERSION"
-          fi
