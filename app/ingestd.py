@@ -1399,63 +1399,78 @@ async function home(){
   startWarp(document.getElementById('warp'));
 }
 
+/* ---- imperial spinner --------------------------------------------------
+   This was pasted inline twice, and in both copies every arc had endpoints
+   off its own declared radius - the worst claimed r=90 with endpoints at
+   77.8 and 94.9. SVG answers an impossible arc by growing the radius until
+   the chord fits and then re-centring it, so that path orbited a point
+   nowhere near the core and read as a tilted blob rather than a ring. One
+   orbit dot sat at r=75 among three at r=85 for the same reason: the
+   coordinates were typed by hand instead of computed. They are computed
+   here, from one centre, so concentricity is not something that can rot.
+
+   The three orbits are spaced so the counter-rotating rings cannot cross:
+   ring1 occupies 74-82, the dots 85-93, ring2 95-101, and the outermost
+   glow lands at ~107 inside a 110 half-box. ring2 is the outer one - it
+   used to share r=90 with ring1 and swept straight through it. */
+const IMP={c:110, r1:78, rd:89, r2:98};
+function impPt(r,deg){
+  const t=deg*Math.PI/180;
+  return [(IMP.c+r*Math.cos(t)).toFixed(2),(IMP.c+r*Math.sin(t)).toFixed(2)];
+}
+function impArc(r,a0,a1){
+  const [x0,y0]=impPt(r,a0), [x1,y1]=impPt(r,a1);
+  return `M${x0},${y0} A${r},${r} 0 ${Math.abs(a1-a0)>180?1:0},${a1>a0?1:0} ${x1},${y1}`;
+}
+function imperialSvg(){
+  const arc=(r,a0,a1,w,col,op)=>`<path d="${impArc(r,a0,a1)}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="round"${op?` opacity="${op}"`:''} filter="url(#glow)"/>`;
+  const dot=a=>{ const [x,y]=impPt(IMP.rd,a);
+    return `<circle cx="${x}" cy="${y}" r="4" fill="#ff6666" filter="url(#glow)"/>`; };
+  const tick=a=>{ const [x0,y0]=impPt(45,a), [x1,y1]=impPt(68,a);
+    return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>`; };
+  return `<div class=row style="justify-content:center;padding:60px 0">
+    <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
+      <defs>
+        <!-- filterUnits is not decoration. The default is objectBoundingBox,
+             and a horizontal or vertical line has a zero-area bbox, which
+             makes the filter region empty and drops the element entirely.
+             That is why four of the eight tick marks have never once been
+             drawn. A user-space region is independent of the bbox. -->
+        <filter id="glow" filterUnits="userSpaceOnUse"
+                x="0" y="0" width="220" height="220">
+          <feGaussianBlur stdDeviation="3" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <style>
+          @keyframes spin1{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+          @keyframes spin2{from{transform:rotate(0)}to{transform:rotate(-360deg)}}
+          @keyframes spin3{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+          @keyframes pulse{0%,100%{r:16px;opacity:.6}50%{r:22px;opacity:1}}
+          .ring1{animation:spin1 6s linear infinite;transform-origin:110px 110px}
+          .ring2{animation:spin2 10s linear infinite;transform-origin:110px 110px}
+          .ring3{animation:spin3 8s linear infinite;transform-origin:110px 110px}
+          .pulse{animation:pulse 2s ease-in-out infinite}
+          @media (prefers-reduced-motion:reduce){
+            .ring1,.ring2,.ring3,.pulse{animation:none}}
+        </style>
+      </defs>
+      <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
+      <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
+      ${[0,45,90,135,180,225,270,315].map(tick).join('')}
+      <g class="ring1">${arc(IMP.r1,-90,-35,8,'#ff3333')}${arc(IMP.r1,90,145,8,'#ff3333')}</g>
+      <g class="ring3">${dot(0)}${dot(90)}${dot(180)}${dot(270)}</g>
+      <g class="ring2">${arc(IMP.r2,0,54,6,'#ff4444','0.8')}${arc(IMP.r2,180,234,6,'#ff4444','0.8')}</g>
+      <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
+      <circle cx="110" cy="110" r="10" fill="#000"/>
+    </svg>
+  </div>`;
+}
+
 async function fw(check){
   const el=document.getElementById('fwrack'); if(!el) return;
   if(!check&&fwCache) return fwRender(fwCache);
   if(check){
-    el.innerHTML=`<div class=row style="justify-content:center;padding:60px 0">
-      <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
-        <defs>
-          <style>
-            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes pulse { 0%, 100% { r: 16px; opacity: 0.6; } 50% { r: 22px; opacity: 1; } }
-            .ring1 { animation: spin1 6s linear infinite; transform-origin: 110px 110px; }
-            .ring2 { animation: spin2 10s linear infinite; transform-origin: 110px 110px; }
-            .ring3 { animation: spin3 8s linear infinite; transform-origin: 110px 110px; }
-            .pulse { animation: pulse 2s ease-in-out infinite; }
-          </style>
-        </defs>
-        <!-- Outer rotating rings - substantial arcs -->
-        <g class="ring1">
-          <path d="M110,20 A90,90 0 0,1 184,55" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-          <path d="M56,184 A90,90 0 0,1 20,110" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-        </g>
-        <g class="ring2">
-          <path d="M200,110 A90,90 0 0,1 165,185" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-          <path d="M55,55 A90,90 0 0,1 80,20" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-        </g>
-        <g class="ring3">
-          <circle cx="110" cy="25" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="185" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="110" cy="195" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="25" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-        </g>
-        <!-- Center structure -->
-        <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
-        <!-- 8 spokes -->
-        <line x1="110" y1="65" x2="110" y2="40" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="155" y1="110" x2="180" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="110" y1="160" x2="110" y2="180" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="65" y1="110" x2="40" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="144" y1="76" x2="164" y2="56" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="156" y1="164" x2="176" y2="144" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="76" y1="156" x2="56" y2="176" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="64" y1="56" x2="44" y2="76" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <!-- Pulsing center circle -->
-        <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="10" fill="#000"/>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-          <feMerge>
-            <feMergeNode in="coloredBlur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </svg>
-    </div>`;
+    el.innerHTML=`${imperialSvg()}`;
   }
   const start=Date.now();
   let f; try{ f=await api('/api/firmware'+(check?'?check=1':'')); }
@@ -1666,55 +1681,7 @@ async function act(what,id,action,val){
   const body=new URLSearchParams({what,id,action:action||'',approved:val??'',
     hash:(what==='scan_start'||what==='scan_fresh')&&val?'1':''});
   if(what==='fw_install'){
-    document.getElementById('app').innerHTML=`<div class=row style="justify-content:center;padding:60px 0">
-      <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
-        <defs>
-          <style>
-            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes pulse { 0%, 100% { r: 16px; opacity: 0.6; } 50% { r: 22px; opacity: 1; } }
-            .ring1 { animation: spin1 6s linear infinite; transform-origin: 110px 110px; }
-            .ring2 { animation: spin2 10s linear infinite; transform-origin: 110px 110px; }
-            .ring3 { animation: spin3 8s linear infinite; transform-origin: 110px 110px; }
-            .pulse { animation: pulse 2s ease-in-out infinite; }
-          </style>
-        </defs>
-        <g class="ring1">
-          <path d="M110,20 A90,90 0 0,1 184,55" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-          <path d="M56,184 A90,90 0 0,1 20,110" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-        </g>
-        <g class="ring2">
-          <path d="M200,110 A90,90 0 0,1 165,185" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-          <path d="M55,55 A90,90 0 0,1 80,20" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-        </g>
-        <g class="ring3">
-          <circle cx="110" cy="25" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="185" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="110" cy="195" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="25" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-        </g>
-        <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
-        <line x1="110" y1="65" x2="110" y2="40" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="155" y1="110" x2="180" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="110" y1="160" x2="110" y2="180" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="65" y1="110" x2="40" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="144" y1="76" x2="164" y2="56" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="156" y1="164" x2="176" y2="144" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="76" y1="156" x2="56" y2="176" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="64" y1="56" x2="44" y2="76" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="10" fill="#000"/>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-          <feMerge>
-            <feMergeNode in="coloredBlur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </svg>
-    </div><div class=row style="text-align:center;padding:20px"><p style="font:11px/1.5 var(--mono);color:#9aa2b4">Installing update and restarting...</p></div>`;
+    document.getElementById('app').innerHTML=`${imperialSvg()}<div class=row style="text-align:center;padding:20px"><p style="font:11px/1.5 var(--mono);color:#9aa2b4">Installing update and restarting...</p></div>`;
   }
   await api('/api/act',{method:'POST',body});
   if(what==='fw_install'){ fwCache=null; asCache=null; homeDrawn=false; return; }
