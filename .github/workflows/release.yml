@@ -1,6 +1,3 @@
-# Continuous Deployment Workflow
-# Runs when you create a git tag (e.g., git tag v1.6.2)
-
 name: Release - Create GitHub Release
 
 on:
@@ -11,10 +8,9 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    name: Create Release
     
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v3
       
       - name: Extract version
@@ -23,11 +19,19 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
-      # Simple, reliable release creation using GitHub CLI
-      - name: Create Release
+      - name: Create Release via GitHub API
         run: |
-          gh release create "${{ steps.version.outputs.version }}" \
-            --title "nz-ingest ${{ steps.version.outputs.version }}" \
-            --notes "See CHANGELOG.md for details on this release."
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          curl -X POST https://api.github.com/repos/${{ github.repository }}/releases \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"tag_name\": \"$VERSION\",
+              \"name\": \"nz-ingest $VERSION\",
+              \"body\": \"See CHANGELOG.md for details.\",
+              \"draft\": false,
+              \"prerelease\": false
+            }"
+          
+          echo "✓ Release $VERSION created successfully"
