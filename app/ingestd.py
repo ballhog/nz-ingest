@@ -59,12 +59,17 @@ PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
 
-VERSION = '1.3.0'
+VERSION = '1.3.3'
 # Where the update button pulls from - a raw-file base URL, e.g.
 #   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
 # Left empty the panel simply reports that no source is configured. Nothing
 # is ever fetched unless you press the button.
 UPDATE_BASE = os.environ.get('NZ_UPDATE_BASE', '').rstrip('/')
+# Optional token for a PRIVATE repo. raw.githubusercontent.com will not serve
+# private content at all, so when a token is present the raw URL is rewritten
+# to GitHub's contents API, which does. A fine-grained token with read-only
+# "Contents" on this one repo is all that is needed.
+UPDATE_TOKEN = os.environ.get('NZ_UPDATE_TOKEN', '').strip()
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 CODE_FILES = ('ingestd.py', 'mediacheck.py', 'store.py')
 
@@ -240,6 +245,45 @@ def fw_local():
     return out
 
 
+def _peek(b, n=60):
+    """First few bytes as printable text, for error messages. Knowing what
+    actually came back is the difference between a five-second fix and an
+    hour of guessing."""
+    try:
+        t = b[:n].decode('utf-8', 'replace')
+    except Exception:                                       # noqa: BLE001
+        t = repr(b[:n])
+    return t.replace('\n', ' ').replace('\r', ' ').strip() or '(empty)'
+
+
+def fw_url(fname):
+    """Resolve one file's URL, switching to the API form for private repos.
+
+    raw.githubusercontent.com/OWNER/REPO/BRANCH/app/x.py
+      -> api.github.com/repos/OWNER/REPO/contents/app/x.py?ref=BRANCH
+    """
+    base = '%s/%s' % (UPDATE_BASE, fname)
+    if not UPDATE_TOKEN or 'raw.githubusercontent.com' not in base:
+        return base
+    tail = base.split('raw.githubusercontent.com/', 1)[1]
+    bits = tail.split('/')
+    if len(bits) < 4:
+        return base
+    owner, repo, branch = bits[0], bits[1], bits[2]
+    path = '/'.join(bits[3:])
+    return ('https://api.github.com/repos/%s/%s/contents/%s?ref=%s'
+            % (owner, repo, path, branch))
+
+
+def fw_headers():
+    h = {'User-Agent': 'nz-ingest'}
+    if UPDATE_TOKEN:
+        h['Authorization'] = 'Bearer ' + UPDATE_TOKEN
+        h['Accept'] = 'application/vnd.github.raw'
+        h['X-GitHub-Api-Version'] = '2022-11-28'
+    return h
+
+
 def fw_fetch():
     """Pull each source file and refuse anything that will not compile.
 
@@ -250,20 +294,46 @@ def fw_fetch():
     if not UPDATE_BASE:
         raise RuntimeError('NZ_UPDATE_BASE is not set')
     import urllib.request
+    import urllib.error
     got = {}
     for f in CODE_FILES:
-        url = '%s/%s' % (UPDATE_BASE, f)
-        req = urllib.request.Request(url, headers={'User-Agent': 'nz-ingest'})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            b = r.read()
-        if len(b) < 600:
-            raise RuntimeError('%s came back only %d bytes - refusing'
-                               % (f, len(b)))
+        url = fw_url(f)
+        req = urllib.request.Request(url, headers=fw_headers())
         try:
-            compile(b.decode('utf-8'), f, 'exec')
-        except (UnicodeDecodeError, SyntaxError) as exc:
-            raise RuntimeError('%s does not compile: %s' % (f, exc))
-        got[f] = b
+            with urllib.request.urlopen(req, timeout=30) as r:
+                b = r.read()
+        except urllib.error.HTTPError as exc:
+            hint = ''
+            if exc.code == 404:
+                hint = (' — repo/branch/path wrong, or the repo is private and '
+                        'NZ_UPDATE_TOKEN is not set' if not UPDATE_TOKEN
+                        else ' — path wrong, or the token cannot read this repo')
+            elif exc.code in (401, 403):
+                hint = ' — token rejected or lacks Contents:read on this repo'
+            raise RuntimeError('%s: HTTP %s%s' % (f, exc.code, hint))
+        if len(b) < 600:
+            raise RuntimeError('%s came back only %d bytes - refusing (%s)'
+                               % (f, len(b), _peek(b)))
+        # utf-8-sig strips a BOM. Anything that has passed through a Windows
+        # editor on its way to the repo may carry three invisible bytes at the
+        # front, and Python rejects those as a syntax error on line 1.
+        try:
+            text = b.decode('utf-8-sig')
+        except UnicodeDecodeError as exc:
+            raise RuntimeError('%s is not text: %s (%s)'
+                               % (f, exc, _peek(b)))
+        if text.lstrip().startswith(('<!DOCTYPE', '<html', '<?xml')):
+            raise RuntimeError(
+                '%s came back as a web page, not code - the base URL is '
+                'pointing at a GitHub page rather than raw content. It must '
+                'start https://raw.githubusercontent.com/ (got: %s)'
+                % (f, _peek(b)))
+        try:
+            compile(text, f, 'exec')
+        except SyntaxError as exc:
+            raise RuntimeError('%s does not compile: %s (starts: %s)'
+                               % (f, exc, _peek(b)))
+        got[f] = text.encode('utf-8')      # normalised, BOM removed
     return got
 
 
@@ -1177,6 +1247,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == '/api/firmware':
             want = parse_qs(u.query).get('check')
             info = {'version': VERSION, 'base': UPDATE_BASE,
+                    'token': bool(UPDATE_TOKEN),
                     'writable': os.access(CODE_DIR, os.W_OK),
                     'local': fw_local(), 'remote': None, 'error': None}
             if want:
