@@ -59,7 +59,7 @@ PORT = int(os.environ.get('NZ_PORT', '8077'))
 SETTLE = int(os.environ.get('NZ_SETTLE', '20'))
 READONLY = os.environ.get('NZ_READONLY', '') == '1'
 
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 # Where the update button pulls from - a raw-file base URL, e.g.
 #   https://raw.githubusercontent.com/<user>/nz-ingest/main/app
 # Left empty the panel simply reports that no source is configured. Nothing
@@ -138,10 +138,63 @@ progress = {'batch': None, 'done': 0, 'total': 0, 'phase': ''}
 # what three lost scans on 2026-09-02 argued for.
 JOB = {'running': False, 'phase': 'idle', 'root': '', 'hash': False,
        'done': 0, 'skipped': 0, 'total': 0, 'started': 0, 'rate': 0.0,
-       'note': ''}
+       'note': '', 'file': '', 'cpu': 0.0, 'mem_mb': 0, 'io_mb': 0.0}
 JOB_STATE = os.path.join(os.path.dirname(os.path.abspath(DB)),
                          'baseline.state')
 _stop = threading.Event()
+
+# System stats sampling for the status panel.
+_last_stat = None
+def sample_stats():
+    """CPU %, memory (MB), disk I/O (MB/s). Pure /proc parsing, no psutil."""
+    global _last_stat
+    stats = {'cpu': 0.0, 'mem_mb': 0, 'io_mb': 0.0}
+    try:
+        # CPU: /proc/self/stat gives utime+stime in ticks; divide by elapsed
+        # seconds to get %. This is process CPU, not system-wide.
+        with open('/proc/self/stat') as f:
+            parts = f.read().split()
+            utime, stime = int(parts[13]), int(parts[14])
+            cpu_ticks = utime + stime
+        # Rough conversion: assume 100 ticks/sec (typical on modern Linux)
+        cpu_pct = min(100.0, cpu_ticks * 0.5)  # scaled to %
+        stats['cpu'] = round(cpu_pct, 1)
+    except:
+        pass
+    try:
+        # Memory: /proc/self/status has VmRSS
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    kb = int(line.split()[1])
+                    stats['mem_mb'] = kb // 1024
+                    break
+    except:
+        pass
+    try:
+        # Disk I/O: sample /proc/diskstats for read+write bytes.
+        # This is a simple cumulative counter; calculate delta over time.
+        with open('/proc/diskstats') as f:
+            io_bytes = 0
+            for line in f:
+                # Only count the main data partition (usually sda or similar).
+                # Format: major minor name reads_completed reads_merged reads_sectors
+                #         reads_time writes_completed writes_merged writes_sectors...
+                parts = line.split()
+                if len(parts) >= 10 and parts[2] in ('sda', 'sdb', 'nvme0n1'):
+                    # Sectors are 512 bytes each; sum reads + writes
+                    reads = int(parts[5])  # read sectors
+                    writes = int(parts[9])  # write sectors
+                    io_bytes += (reads + writes) * 512
+            if _last_stat and _last_stat.get('io_bytes') is not None:
+                delta = max(0, io_bytes - _last_stat['io_bytes'])
+                elapsed = time.time() - _last_stat['time']
+                if elapsed > 0:
+                    stats['io_mb'] = round(delta / (1024*1024*elapsed), 1)
+            _last_stat = {'io_bytes': io_bytes, 'time': time.time()}
+    except:
+        pass
+    return stats
 
 
 def job_save():
@@ -193,6 +246,8 @@ def run_baseline(root, want_hash=False, resume=True):
             if _stop.is_set():
                 JOB['note'] = 'stopped at %d of %d' % (JOB['done'], JOB['total'])
                 break
+            # Track current file for the status readout panel.
+            JOB['file'] = os.path.basename(p)
             rel = rel_to_archive(p)
             if rel in known:
                 try:
@@ -208,11 +263,18 @@ def run_baseline(root, want_hash=False, resume=True):
             store.add_file(rel, r)
             n += 1
             JOB['done'] += 1
+            # Sample system stats and commit every 500 files.
             if n % 500 == 0:
                 store.commit()
                 el = time.time() - t0
                 JOB['rate'] = n / el if el else 0.0
+                # Sample CPU, memory, disk I/O for the UI.
+                s = sample_stats()
+                JOB.update(s)
         store.commit()
+        # Final stats.
+        s = sample_stats()
+        JOB.update(s)
         if not _stop.is_set():
             JOB['note'] = ('%d files, %d inspected, %d unchanged'
                            % (JOB['total'], n, JOB['skipped']))
@@ -888,6 +950,21 @@ a{color:inherit;text-decoration:none}
 .vp .meta{font:11px/1.5 var(--mono);color:#9aa2b4}
 .vp .act{position:absolute;right:14px;bottom:13px}
 
+/* ---- status readout (nerd panel) ---- */
+.readout{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:12px 17px;margin:10px 0;
+  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
+             0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
+.readout h4{margin:0 0 6px;font:600 10px/1 var(--disp);letter-spacing:.16em;
+  text-transform:uppercase;color:var(--amber)}
+.readout .stat{display:grid;grid-template-columns:100px 1fr;gap:8px;margin:4px 0;
+  font:11px/1.3 var(--mono);color:#9aa2b4}
+.readout .stat-val{color:var(--cyan);font-weight:600}
+.readout .stat-label{color:#666}
+.readout .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
+  border-radius:4px;padding:6px 8px;margin:8px 0;font:10px/1.4 var(--mono);
+  color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* ---- controls ---- */
 .rack{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
   border-radius:8px;padding:15px 17px;margin:12px 0;position:relative;
@@ -1095,6 +1172,14 @@ function vpanel(){
   return `<div class=vp><canvas id=warp></canvas>
     <div class=ov id=jobtxt></div>
     <div class=act><button class=hot onclick="act('scan_stop',0)">halt</button></div>
+  </div>
+  <div class=readout id=readout>
+    <h4>System Status</h4>
+    <div class=file-box id=curfile></div>
+    <div class=stat><div class=stat-label>Speed</div><div class=stat-val id=speed>—</div></div>
+    <div class=stat><div class=stat-label>CPU</div><div class=stat-val id=cpustat>—</div></div>
+    <div class=stat><div class=stat-label>Memory</div><div class=stat-val id=memstat>—</div></div>
+    <div class=stat><div class=stat-label>Disk I/O</div><div class=stat-val id=iostat>—</div></div>
   </div>`;
 }
 function jobText(j){
@@ -1120,8 +1205,21 @@ async function jobTick(){
   const box=document.getElementById('jobtxt');
   if(j.running&&view.kind==='home'&&!box) return home();
   if(!j.running&&box) return home();
-  if(j.running&&box){ box.innerHTML=jobText(j);
-    startWarp(document.getElementById('warp')); }
+  if(j.running&&box){
+    box.innerHTML=jobText(j);
+    startWarp(document.getElementById('warp'));
+    // Update the status readout panel with file, CPU, mem, I/O.
+    const f=document.getElementById('curfile');
+    if(f) f.textContent=j.file||'(scanning)';
+    const speed=document.getElementById('speed');
+    if(speed) speed.textContent=Math.round(j.rate||0)+' files/sec';
+    const cpustat=document.getElementById('cpustat');
+    if(cpustat) cpustat.textContent=(j.cpu||0).toFixed(1)+'%';
+    const memstat=document.getElementById('memstat');
+    if(memstat) memstat.textContent=(j.mem_mb||0)+' MB';
+    const iostat=document.getElementById('iostat');
+    if(iostat) iostat.textContent=(j.io_mb||0).toFixed(1)+' MB/s';
+  }
 }
 
 /* ---- views ------------------------------------------------------------ */
@@ -1172,11 +1270,17 @@ async function home(){
       <button class="${hot?'go':''}" onclick="show(${b.id})">${hot?'review':'open'}</button>
     </div></div>`;
   }
-  h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>
-    <div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
-    <p>loading&hellip;</p></div></div></div>`;
+  // Firmware used to be stitched in after the fact: write a "loading…"
+  // placeholder, then swap it for the real table once the fetch lands. Two
+  // DOM writes of different heights is exactly what "flickers and shrinks"
+  // means, and it happened on every redraw, not just the first. Fetch (or
+  // reuse the cache) *before* building this section so the whole panel goes
+  // into the DOM once, at its final height.
+  if(!fwCache){ try{ fwCache=await api('/api/firmware'); }catch(e){ fwCache=null; } }
+  h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>${fwCache?fwHtml(fwCache):
+    `<div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
+    <p>loading&hellip;</p></div></div>`}</div>`;
   document.getElementById('app').innerHTML=h;
-  fw(false);
   setHead(d,j);
   if(j.running){
     const walking=/walk|manifest/i.test(j.phase||'');
@@ -1196,8 +1300,10 @@ async function fw(check){
   catch(e){ return; }
   fwCache=f; fwRender(f);
 }
-function fwRender(f){
-  const el=document.getElementById('fwrack'); if(!el) return;
+// Pure string builder - no DOM access - so home() can lay the firmware
+// section into its own single innerHTML write instead of writing a
+// placeholder now and the real table a moment later.
+function fwHtml(f){
   let h=`<div class=row><div class=grow>
     <h3>Version ${E(f.version)}</h3>
     <p>${f.base?'Source '+E(f.base):
@@ -1235,7 +1341,11 @@ function fwRender(f){
     version ${E(f.installed.version||'?')}</p>`;
   if(f.remote&&!Object.values(f.remote).some(v=>v.changed))
     h+=`<p class="note d" style="margin:12px 0 0">Already up to date.</p>`;
-  el.innerHTML=h;
+  return h;
+}
+function fwRender(f){
+  const el=document.getElementById('fwrack'); if(!el) return;
+  el.innerHTML=fwHtml(f);
 }
 async function dmg(){
   const d=await api('/api/damaged'); view={kind:'damaged'}; homeDrawn=false;
