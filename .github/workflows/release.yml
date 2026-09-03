@@ -1,6 +1,6 @@
 # Continuous Deployment Workflow
 # Runs when you create a git tag (e.g., git tag v1.6.2)
-# Automatically creates a GitHub release and updates documentation
+# Automatically creates a GitHub release
 
 name: Release - Create GitHub Release
 
@@ -27,52 +27,31 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Creating release for version: $VERSION"
       
-      # Step 3: Read CHANGELOG
-      - name: Read CHANGELOG
-        id: changelog
-        run: |
-          # Extract the first release section from CHANGELOG.md
-          sed -n '/^## \[/,/^## \[/p' CHANGELOG.md | head -n -1 > release_notes.txt
-          echo "release_notes=$(cat release_notes.txt)" >> $GITHUB_OUTPUT
-      
-      # Step 4: Create GitHub Release
+      # Step 3: Create Release using GitHub CLI (more reliable)
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: "nz-ingest ${{ steps.version.outputs.version }}"
-          body: |
-            # nz-ingest ${{ steps.version.outputs.version }}
-            
-            Smart photo ingest appliance for TrueNAS
-            
-            ## Installation via TrueNAS
-            
-            1. Go to **Apps → Discover**
-            2. Click **+ Add Catalog**
-            3. Enter:
-               - **Name:** nz-ingest
-               - **Repository:** https://github.com/ballhog/nz-ingest
-               - **Branch:** main
-            4. Search for "nz-ingest" and click **Install**
-            
-            ## What's New
-            
-            See [CHANGELOG.md](https://github.com/ballhog/nz-ingest/blob/main/CHANGELOG.md) for details.
-            
-            ## Helm Chart
-            
-            Deploy directly with Helm:
-            ```bash
-            helm repo add nz-ingest https://github.com/ballhog/nz-ingest
-            helm install nz-ingest nz-ingest/nz-ingest
-            ```
-          draft: false
-          prerelease: false
+        run: |
+          # Use GitHub CLI which is built-in and more reliable
+          gh release create "${{ steps.version.outputs.version }}" \
+            --title "nz-ingest ${{ steps.version.outputs.version }}" \
+            --notes "Smart photo ingest appliance for TrueNAS SCALE
+
+## Installation via TrueNAS
+
+1. Go to **Apps → Discover**
+2. Click **+ Add Catalog**
+3. Enter:
+   - **Name:** nz-ingest
+   - **Repository:** https://github.com/ballhog/nz-ingest
+   - **Branch:** main
+4. Search for 'nz-ingest' and click **Install**
+
+## What's New
+
+See [CHANGELOG.md](https://github.com/ballhog/nz-ingest/blob/main/CHANGELOG.md) for details."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  update-changelog:
+  verify-changelog:
     runs-on: ubuntu-latest
     name: Verify CHANGELOG Updated
     
@@ -87,5 +66,4 @@ jobs:
             echo "✓ CHANGELOG.md includes $VERSION"
           else
             echo "⚠ Warning: CHANGELOG.md does not mention $VERSION"
-            echo "Next time, update CHANGELOG.md before creating the tag!"
           fi
