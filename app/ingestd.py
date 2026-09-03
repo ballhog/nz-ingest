@@ -963,36 +963,6 @@ a{color:inherit;text-decoration:none}
 .vp .meta{font:11px/1.5 var(--mono);color:#9aa2b4}
 .vp .act{position:absolute;right:14px;bottom:13px}
 
-/* ---- in-flight unified panel ---- */
-.inflight{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
-  border-radius:8px;padding:14px 16px;margin:10px 0;
-  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,
-             0 1px 0 rgba(255,255,255,.055),0 0 0 1px #21212a}
-.inflight .prog{margin-bottom:10px;display:grid;gap:4px}
-.inflight .prog .row{display:grid;grid-template-columns:80px 1fr;gap:12px;
-  align-items:baseline;font:11px/1.5 var(--mono)}
-.inflight .prog .label{color:#666;text-transform:uppercase;letter-spacing:.08em;
-  font-size:9px}
-.inflight .prog .val{color:var(--cyan);font-weight:600}
-.inflight .file-box{background:rgba(0,0,0,.3);border:1px solid #333;
-  border-radius:4px;padding:6px 8px;margin:8px 0;font:10px/1.4 var(--mono);
-  color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.inflight .stats-head{font:9px/1 var(--mono);letter-spacing:.16em;color:var(--amber);
-  text-transform:uppercase;margin:8px 0 6px}
-.inflight .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.inflight .stat{display:flex;flex-direction:column;gap:3px}
-.inflight .label{font:9px/1 var(--mono);color:#666;text-transform:uppercase;
-  letter-spacing:.08em}
-.inflight .val{font:600 13px/1 var(--mono);color:var(--cyan)}
-.inflight .bar{height:4px;background:rgba(0,0,0,.5);border:1px solid #333;
-  border-radius:2px;overflow:hidden;--w:0%}
-.inflight .bar:before{content:"";display:block;height:100%;background:
-  linear-gradient(90deg,#4dd0ff,#00d9ff);width:var(--w);transition:width .15s ease-out}
-.inflight #speedbar:before{background:linear-gradient(90deg,#4dd0ff,#00d9ff)}
-.inflight #cpubar:before{background:linear-gradient(90deg,#ffaa00,#ff8800)}
-.inflight #membar:before{background:linear-gradient(90deg,#ff6b6b,#ff4444)}
-.inflight #iobar:before{background:linear-gradient(90deg,#66ff99,#44ff77)}
-
 /* ---- controls ---- */
 .rack{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
   border-radius:8px;padding:15px 17px;margin:12px 0;position:relative;
@@ -1003,6 +973,41 @@ a{color:inherit;text-decoration:none}
 .rack p{margin:0;font:11px/1.55 var(--mono);color:var(--dim);max-width:62ch}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .grow{flex:1 1 auto;min-width:0}
+
+/* ---- archive stats section ---- */
+.archstats{background:linear-gradient(#0e0e14,#0a0a10);border:1px solid #000;
+  border-radius:8px;padding:16px;margin:12px 0;position:relative;
+  box-shadow:0 4px 12px rgba(0,0,0,.7) inset,0 1px 0 rgba(255,255,255,.055),
+             0 0 0 1px #21212a}
+.archstats h3{margin:0 0 12px;font:600 12px/1.3 var(--disp);letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink);display:flex;align-items:center;gap:10px}
+.stat-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px;margin-bottom:14px}
+.stat-box{background:linear-gradient(#0a0a10,#050508);border:1px solid #1a1a22;
+  border-radius:6px;padding:11px;text-align:center}
+.stat-box b{display:block;font:600 16px/1.1 var(--disp);color:var(--cyan);
+  margin-bottom:4px;text-shadow:0 0 16px rgba(58,208,255,.4)}
+.stat-box span{display:block;font:9px/1.4 var(--mono);letter-spacing:.12em;
+  color:var(--dim);text-transform:uppercase}
+.exif-carousel{position:relative;height:80px;margin:12px 0;overflow:hidden;
+  border:1px solid #1a1a22;border-radius:6px;background:#05050a;
+  box-shadow:0 3px 8px rgba(0,0,0,.6) inset}
+.exif-card{position:absolute;inset:0;padding:10px 12px;display:flex;
+  flex-direction:column;justify-content:center;
+  opacity:0;transition:opacity .6s ease-in-out}
+.exif-card.active{opacity:1}
+.exif-card .path{font:9px/1.2 var(--mono);color:var(--cyan);
+  text-overflow:ellipsis;overflow:hidden;white-space:nowrap;margin-bottom:4px}
+.exif-card .meta{font:10px/1.3 var(--mono);color:var(--dim)}
+.exif-card .meta span{margin-right:12px}
+.stor-bar{height:28px;background:#05050a;border:1px solid #1a1a22;
+  border-radius:6px;overflow:hidden;position:relative;
+  box-shadow:0 2px 6px rgba(0,0,0,.6) inset}
+.stor-fill{height:100%;background:linear-gradient(90deg,#1d7fa3 0%,#3ad0ff 100%);
+  transition:width .8s ease-out;position:relative;
+  box-shadow:0 0 12px rgba(58,208,255,.4) inset}
+.stor-label{position:absolute;right:10px;top:50%;transform:translateY(-50%);
+  font:9px/1 var(--mono);letter-spacing:.12em;color:var(--faint);
+  text-shadow:0 1px 3px rgba(0,0,0,.8)}
 button{font:600 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
   padding:10px 15px;border-radius:6px;color:var(--ink);cursor:pointer;
   background:linear-gradient(#22222b,#15151c);border:1px solid var(--edge2);
@@ -1106,7 +1111,18 @@ let view={kind:'home'};
 // Cached so a periodic re-render never flashes the loading placeholder, and
 // a signature of the state so an idle panel is not rebuilt for no reason.
 let fwCache=null, homeSig='', homeDrawn=false;
+let archiveStats=null, exifIdx=0, exifTimer=null;
 async function api(u,o){const r=await fetch(u,o);return r.json()}
+
+function formatBytes(b){
+  const u=['B','KB','MB','GB','TB'];
+  let v=b;
+  for(let i=0;i<u.length;i++){
+    if(v<1024) return (v.toFixed(1))+' '+u[i];
+    v/=1024;
+  }
+  return (v.toFixed(1))+' TB';
+}
 
 /* ---- panel head ------------------------------------------------------- */
 function lamp(id,on){
@@ -1198,81 +1214,85 @@ function hms(s){s=Math.max(0,s|0);const h=s/3600|0,m=(s%3600)/60|0;
   return h?h+'h '+m+'m':(m?m+'m '+(s%60)+'s':s+'s')}
 function vpanel(){
   return `<div class=vp><canvas id=warp></canvas>
+    <div class=ov id=jobtxt></div>
     <div class=act><button class=hot onclick="act('scan_stop',0)">halt</button></div>
-  </div>
-  <div class=inflight>
-    <div class=prog>
-      <div class=row><div class=label>Phase</div><div class=val id=phase>—</div></div>
-      <div class=row><div class=label>Total</div><div class=val id=prog-total>—</div></div>
-      <div class=row><div class=label>Done</div><div class=val id=prog-done>—</div></div>
-      <div class=row><div class=label>Speed</div><div class=val id=prog-speed>—</div></div>
-      <div class=row><div class=label>ETA</div><div class=val id=prog-eta>—</div></div>
-    </div>
-    <div class=file-box id=curfile></div>
-    <div class=stats-head>SYSTEM STATUS</div>
-    <div class=stats>
-      <div class=stat><div class=label>Speed</div><div class=val id=speed>—</div><div class=bar id=speedbar></div></div>
-      <div class=stat><div class=label>CPU</div><div class=val id=cpustat>—</div><div class=bar id=cpubar></div></div>
-      <div class=stat><div class=label>Memory</div><div class=val id=memstat>—</div><div class=bar id=membar></div></div>
-      <div class=stat><div class=label>I/O</div><div class=val id=iostat>—</div><div class=bar id=iobar></div></div>
-    </div>
   </div>`;
+}
+function jobText(j){
+  const b=[];
+  if(j.rate) b.push(Math.round(j.rate)+' files/sec');
+  if(j.eta) b.push(hms(j.eta)+' remaining');
+  if(j.skipped) b.push(j.skipped.toLocaleString()+' unchanged');
+  if(j.hash) b.push('hashing');
+  return `<div class=ph>${E(j.phase)}</div>
+  <div class=big>${j.total?j.done.toLocaleString()+' / '+j.total.toLocaleString()
+    :j.done.toLocaleString()}${j.pct?'  '+j.pct+'%':''}</div>
+  <div class=meta>${E(b.join('  ·  ')||'spinning up')}</div>`;
+}
+
+function rotateExif(){
+  if(!archiveStats||!archiveStats.samples.length) return;
+  const cards=document.querySelectorAll('.exif-card');
+  if(!cards.length) return;
+  cards.forEach(c=>c.classList.remove('active'));
+  exifIdx=(exifIdx+1)%cards.length;
+  cards[exifIdx].classList.add('active');
+}
+
+async function loadArchiveStats(){
+  try{archiveStats=await api('/api/archive-stats');}catch(e){return}
+  const el=document.getElementById('archstats-container');if(!el)return;
+  if(!archiveStats.samples.length&&!archiveStats.models.length) return;
+  let h='<h3>Archive Snapshot</h3>';
+  h+=`<div class=stat-group>
+    <div class=stat-box><b>${archiveStats.file_count.toLocaleString()}</b><span>files</span></div>
+    <div class=stat-box><b>${formatBytes(archiveStats.total_size)}</b><span>total size</span></div>`;
+  for(const m of archiveStats.models.slice(0,3))
+    h+=`<div class=stat-box><b>${m.count}</b><span>${E(m.model||'unknown')}</span></div>`;
+  h+=`</div>`;
+  if(archiveStats.samples.length){
+    h+=`<div class=exif-carousel>`;
+    for(let i=0;i<archiveStats.samples.length;i++){
+      const s=archiveStats.samples[i];
+      const dt=new Date(s.dt);
+      const dateStr=isNaN(dt.getTime())?'–':dt.toLocaleDateString();
+      h+=`<div class="exif-card ${i===0?'active':''}">
+        <div class=path>${E(s.path)}</div>
+        <div class=meta>
+          <span>${E(s.model||'–')}</span>
+          <span>${formatBytes(s.size||0)}</span>
+          <span>${dateStr}</span>
+        </div>
+      </div>`;
+    }
+    h+=`</div>`;
+  }
+  if(archiveStats.total_size){
+    const maxSz=archiveStats.total_size*1.2;
+    const pct=Math.min(100,(archiveStats.total_size/maxSz)*100);
+    h+=`<div style="margin-top:12px"><span style="font:9px/1 var(--mono);letter-spacing:.12em;color:var(--dim);text-transform:uppercase">storage</span>
+    <div class=stor-bar><div class=stor-fill style="width:${pct}%"><span class=stor-label>${formatBytes(archiveStats.total_size)}</span></div></div></div>`;
+  }
+  el.innerHTML=h;
+  if(archiveStats.samples.length>1){
+    if(exifTimer) clearInterval(exifTimer);
+    exifTimer=setInterval(rotateExif,4000);
+  }
 }
 async function jobTick(){
   let j,d; try{ j=await api('/api/job'); d=await api('/api/state'); }catch(e){return}
   warpRate=j.running?(j.rate||0):0;
+  // Zero while walking the tree - nothing is being read, and the still field
+  // should say so. Once inspecting, a floor so it reads as alive even before
+  // the first rate sample lands.
   const walking=/walk|manifest/i.test(j.phase||'');
   warpV=!j.running?0:(walking?0:Math.max(0.14,Math.min(1,warpRate/600)));
   setHead(d,j);
-  // Check if in-flight panel exists (scan running)
-  const inflight=document.getElementById('phase');
-  if(j.running&&view.kind==='home'&&!inflight) return home();
-  if(!j.running&&inflight) return home();
-  if(j.running&&inflight){
-    // Update progress section rows
-    const ph=document.getElementById('phase');
-    if(ph) ph.textContent=E(j.phase||'').toUpperCase();
-    const progTotal=document.getElementById('prog-total');
-    if(progTotal) progTotal.textContent=j.total?j.total.toLocaleString():'—';
-    const progDone=document.getElementById('prog-done');
-    if(progDone){
-      let dtext=j.done.toLocaleString();
-      if(j.pct) dtext+=' ('+j.pct+'%)';
-      progDone.textContent=dtext;
-    }
-    const progSpeed=document.getElementById('prog-speed');
-    if(progSpeed) progSpeed.textContent=Math.round(j.rate||0)+' files/sec';
-    const progEta=document.getElementById('prog-eta');
-    if(progEta){
-      if(j.eta) progEta.textContent=hms(j.eta)+' remaining';
-      else progEta.textContent='—';
-    }
-    // Update current file and system stats
-    const f=document.getElementById('curfile');
-    if(f) f.textContent=j.file||'(scanning)';
-    const speed=document.getElementById('speed');
-    const speedVal=Math.round(j.rate||0);
-    if(speed) speed.textContent=speedVal+' files/sec';
-    const cpustat=document.getElementById('cpustat');
-    const cpuVal=j.cpu||0;
-    if(cpustat) cpustat.textContent=cpuVal.toFixed(1)+'%';
-    const memstat=document.getElementById('memstat');
-    const memVal=j.mem_mb||0;
-    if(memstat) memstat.textContent=memVal+' MB';
-    const iostat=document.getElementById('iostat');
-    const ioVal=j.io_mb||0;
-    if(iostat) iostat.textContent=ioVal.toFixed(1)+' MB/s';
-    // Set bar widths (speed: 0-120 files/sec, cpu: 0-100%, mem: scale to reasonable max, io: 0-300 MB/s)
-    setBarWidth('speedbar', Math.min(100, speedVal/120*100));
-    setBarWidth('cpubar', cpuVal);
-    setBarWidth('membar', Math.min(100, memVal/512*100));
-    setBarWidth('iobar', Math.min(100, ioVal/300*100));
-    startWarp(document.getElementById('warp'));
-  }
-}
-function setBarWidth(id, pct){
-  const bar=document.getElementById(id);
-  if(bar) bar.style.setProperty('--w',Math.max(0,Math.min(100,pct))+'%');
+  const box=document.getElementById('jobtxt');
+  if(j.running&&view.kind==='home'&&!box) return home();
+  if(!j.running&&box) return home();
+  if(j.running&&box){ box.innerHTML=jobText(j);
+    startWarp(document.getElementById('warp')); }
 }
 
 /* ---- views ------------------------------------------------------------ */
@@ -1282,9 +1302,9 @@ async function home(){
   // Re-rendering an idle panel every few seconds made the firmware rack
   // flash. Only redraw when something a person would notice has changed.
   const sig=JSON.stringify([d.manifest,d.hashed,d.damaged,d.unreadable,
-    d.waiting,d.readonly,j.running,j.note,
+    d.waiting,d.readonly,j.running,j.phase,j.note,
     (d.batches||[]).map(b=>[b.id,b.state,b.note])]);
-  if(homeDrawn&&sig===homeSig&&(!j.running||document.getElementById('phase'))) return;
+  if(homeDrawn&&sig===homeSig&&!j.running) return;
   homeSig=sig; homeDrawn=true;
   let h='';
   h+=`<div class=mods>
@@ -1303,7 +1323,8 @@ async function home(){
       <button class=go onclick="act('scan_start',0)">scan</button>
       <button onclick="act('scan_start',0,'',1)">+ hashes</button>
       <button onclick="act('scan_fresh',0)">full rescan</button>
-    </div></div>`;
+    </div></div>
+    <div class=archstats id=archstats-container></div>`;
     if(d.waiting) h+=`<div class=rack><div class=row>
       <div class=grow><h3>Drop folder</h3>
       <p>${d.waiting} file(s) waiting. A batch forms on its own once copying
@@ -1323,17 +1344,12 @@ async function home(){
       <button class="${hot?'go':''}" onclick="show(${b.id})">${hot?'review':'open'}</button>
     </div></div>`;
   }
-  // Firmware used to be stitched in after the fact: write a "loading…"
-  // placeholder, then swap it for the real table once the fetch lands. Two
-  // DOM writes of different heights is exactly what "flickers and shrinks"
-  // means, and it happened on every redraw, not just the first. Fetch (or
-  // reuse the cache) *before* building this section so the whole panel goes
-  // into the DOM once, at its final height. Auto-check for updates on first load.
-  if(!fwCache){ try{ fwCache=await api('/api/firmware?check=1'); }catch(e){ fwCache=null; } }
-  h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>${fwCache?fwHtml(fwCache):
-    `<div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
-    <p>loading&hellip;</p></div></div>`}</div>`;
+  h+=`<h2 class=sec>Firmware</h2><div class=rack id=fwrack>
+    <div class=row><div class=grow><h3>Version ${E(j.version||'')}</h3>
+    <p>loading&hellip;</p></div></div></div>`;
   document.getElementById('app').innerHTML=h;
+  fw(false);
+  loadArchiveStats();
   setHead(d,j);
   if(j.running){
     const walking=/walk|manifest/i.test(j.phase||'');
@@ -1347,73 +1363,14 @@ async function home(){
 async function fw(check){
   const el=document.getElementById('fwrack'); if(!el) return;
   if(!check&&fwCache) return fwRender(fwCache);
-  if(check){
-    el.innerHTML=`<div class=row style="justify-content:center;padding:60px 0">
-      <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
-        <defs>
-          <style>
-            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes pulse { 0%, 100% { r: 16px; opacity: 0.6; } 50% { r: 22px; opacity: 1; } }
-            .ring1 { animation: spin1 6s linear infinite; transform-origin: 110px 110px; }
-            .ring2 { animation: spin2 10s linear infinite; transform-origin: 110px 110px; }
-            .ring3 { animation: spin3 8s linear infinite; transform-origin: 110px 110px; }
-            .pulse { animation: pulse 2s ease-in-out infinite; }
-          </style>
-        </defs>
-        <!-- Outer rotating rings - substantial arcs -->
-        <g class="ring1">
-          <path d="M110,20 A90,90 0 0,1 184,55" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-          <path d="M56,184 A90,90 0 0,1 20,110" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-        </g>
-        <g class="ring2">
-          <path d="M200,110 A90,90 0 0,1 165,185" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-          <path d="M55,55 A90,90 0 0,1 80,20" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-        </g>
-        <g class="ring3">
-          <circle cx="110" cy="25" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="185" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="110" cy="195" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="25" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-        </g>
-        <!-- Center structure -->
-        <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
-        <!-- 8 spokes -->
-        <line x1="110" y1="65" x2="110" y2="40" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="155" y1="110" x2="180" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="110" y1="160" x2="110" y2="180" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="65" y1="110" x2="40" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="144" y1="76" x2="164" y2="56" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="156" y1="164" x2="176" y2="144" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="76" y1="156" x2="56" y2="176" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="64" y1="56" x2="44" y2="76" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <!-- Pulsing center circle -->
-        <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="10" fill="#000"/>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-          <feMerge>
-            <feMergeNode in="coloredBlur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </svg>
-    </div>`;
-  }
-  const start=Date.now();
+  if(check) el.innerHTML=`<div class=row><div class=grow><h3>Firmware</h3>
+    <p>contacting update source&hellip;</p></div></div>`;
   let f; try{ f=await api('/api/firmware'+(check?'?check=1':'')); }
   catch(e){ return; }
-  // Enforce 5-second minimum display
-  const elapsed=Date.now()-start;
-  if(check&&elapsed<5000) await new Promise(r=>setTimeout(r,5000-elapsed));
   fwCache=f; fwRender(f);
 }
-// Pure string builder - no DOM access - so home() can lay the firmware
-// section into its own single innerHTML write instead of writing a
-// placeholder now and the real table a moment later.
-function fwHtml(f){
+function fwRender(f){
+  const el=document.getElementById('fwrack'); if(!el) return;
   let h=`<div class=row><div class=grow>
     <h3>Version ${E(f.version)}</h3>
     <p>${f.base?'Source '+E(f.base):
@@ -1451,11 +1408,7 @@ function fwHtml(f){
     version ${E(f.installed.version||'?')}</p>`;
   if(f.remote&&!Object.values(f.remote).some(v=>v.changed))
     h+=`<p class="note d" style="margin:12px 0 0">Already up to date.</p>`;
-  return h;
-}
-function fwRender(f){
-  const el=document.getElementById('fwrack'); if(!el) return;
-  el.innerHTML=fwHtml(f);
+  el.innerHTML=h;
 }
 async function dmg(){
   const d=await api('/api/damaged'); view={kind:'damaged'}; homeDrawn=false;
@@ -1536,59 +1489,8 @@ async function show(id){
 async function act(what,id,action,val){
   const body=new URLSearchParams({what,id,action:action||'',approved:val??'',
     hash:(what==='scan_start'||what==='scan_fresh')&&val?'1':''});
-  if(what==='fw_install'){
-    document.getElementById('app').innerHTML=`<div class=row style="justify-content:center;padding:60px 0">
-      <svg class=imperial viewBox="0 0 220 220" style="width:200px;height:200px">
-        <defs>
-          <style>
-            @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes spin2 { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-            @keyframes spin3 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-            @keyframes pulse { 0%, 100% { r: 16px; opacity: 0.6; } 50% { r: 22px; opacity: 1; } }
-            .ring1 { animation: spin1 6s linear infinite; transform-origin: 110px 110px; }
-            .ring2 { animation: spin2 10s linear infinite; transform-origin: 110px 110px; }
-            .ring3 { animation: spin3 8s linear infinite; transform-origin: 110px 110px; }
-            .pulse { animation: pulse 2s ease-in-out infinite; }
-          </style>
-        </defs>
-        <g class="ring1">
-          <path d="M110,20 A90,90 0 0,1 184,55" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-          <path d="M56,184 A90,90 0 0,1 20,110" stroke="#ff3333" stroke-width="8" fill="none" stroke-linecap="round" filter="url(#glow)"/>
-        </g>
-        <g class="ring2">
-          <path d="M200,110 A90,90 0 0,1 165,185" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-          <path d="M55,55 A90,90 0 0,1 80,20" stroke="#ff4444" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.8" filter="url(#glow)"/>
-        </g>
-        <g class="ring3">
-          <circle cx="110" cy="25" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="185" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="110" cy="195" r="4" fill="#ff6666" filter="url(#glow)"/>
-          <circle cx="25" cy="110" r="4" fill="#ff6666" filter="url(#glow)"/>
-        </g>
-        <circle cx="110" cy="110" r="50" fill="none" stroke="#ff5555" stroke-width="2" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="40" fill="none" stroke="#ff3333" stroke-width="1.5" opacity="0.6" filter="url(#glow)"/>
-        <line x1="110" y1="65" x2="110" y2="40" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="155" y1="110" x2="180" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="110" y1="160" x2="110" y2="180" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="65" y1="110" x2="40" y2="110" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="144" y1="76" x2="164" y2="56" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="156" y1="164" x2="176" y2="144" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="76" y1="156" x2="56" y2="176" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <line x1="64" y1="56" x2="44" y2="76" stroke="#ff3333" stroke-width="5" stroke-linecap="round" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="18" class="pulse" fill="#ff3333" opacity="0.5" filter="url(#glow)"/>
-        <circle cx="110" cy="110" r="10" fill="#000"/>
-        <filter id="glow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-          <feMerge>
-            <feMergeNode in="coloredBlur"/>
-            <feMergeNode in="SourceGraphic"/>
-          </feMerge>
-        </filter>
-      </svg>
-    </div><div class=row style="text-align:center;padding:20px"><p style="font:11px/1.5 var(--mono);color:#9aa2b4">Installing update and restarting...</p></div>`;
-  }
   await api('/api/act',{method:'POST',body});
-  if(what==='fw_install'){ fwCache=null; homeDrawn=false; return; }
+  if(what==='fw_install'){ fwCache=null; homeDrawn=false; }
   setTimeout(()=>view.kind==='batch'?show(view.id)
     :(view.kind==='damaged'?dmg():home()),350);
 }
