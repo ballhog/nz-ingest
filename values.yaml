@@ -1,0 +1,56 @@
+# Default values for nz-ingest
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+image:
+  repository: python
+  tag: "3.12-slim"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8077
+  targetPort: 8077
+
+# Environment configuration
+environment:
+  # TrueNAS will inject the actual paths based on hostPath volumes
+  NZ_PORT: "8077"
+  NZ_SETTLE: "20"
+  NZ_READONLY: ""  # Set to "1" for dry-run mode
+  NZ_EXCLUDE: "photos,_audit,_ingest,_quarantine,_duplicates,_conflicts,_undated,.ix-apps,ix-applications"
+  # Update source configuration (optional)
+  NZ_UPDATE_BASE: ""  # e.g., https://raw.githubusercontent.com/YOUR_USER/nz-ingest/main/app
+  NZ_UPDATE_TOKEN: ""  # GitHub token for private repos (optional)
+
+# Storage configuration - paths where TrueNAS will mount host directories
+hostPath:
+  drop: "/drop"
+  archive: "/archive"
+  data: "/data"
+
+# Resource limits
+resources:
+  limits:
+    cpu: "2"
+    memory: "2Gi"
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: false
+  runAsUser: 0
+
+# Entrypoint for the container
+entrypoint: "/app/ingestd.py"
+
+# Health check (optional, for monitoring)
+healthCheck:
+  enabled: true
+  path: "/api/state"
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3

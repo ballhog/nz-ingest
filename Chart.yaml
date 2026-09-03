@@ -1,0 +1,23 @@
+apiVersion: v2
+name: nz-ingest
+description: Smart photo ingest appliance for TrueNAS. Drop files, review the plan, approve moves.
+type: application
+version: 1.6.1
+appVersion: "1.6.1"
+keywords:
+  - photo
+  - ingest
+  - archive
+  - deduplication
+  - truenas
+home: https://github.com/ballhog/nz-ingest
+sources:
+  - https://github.com/ballhog/nz-ingest
+icon: https://raw.githubusercontent.com/ballhog/nz-ingest/main/icon.png
+maintainers:
+  - name: joe riera
+    email: iballhog@gmail.com
+dependencies: []
+annotations:
+  truenas.io/catagories: "Photo Management"
+  truenas.io/developer: "joe riera"

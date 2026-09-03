@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nz-ingest.fullname" . }}
+  labels:
+    {{- include "nz-ingest.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "nz-ingest.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nz-ingest.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - python3
+        args:
+          - {{ .Values.entrypoint }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.service.targetPort }}
+          protocol: TCP
+        env:
+        {{- range $key, $value := .Values.environment }}
+        - name: {{ $key }}
+          value: "{{ $value }}"
+        {{- end }}
+        - name: NZ_DROP
+          value: {{ .Values.hostPath.drop | quote }}
+        - name: NZ_ARCHIVE
+          value: {{ .Values.hostPath.archive | quote }}
+        - name: NZ_DB
+          value: {{ .Values.hostPath.data }}/ingest.db
+        volumeMounts:
+        - name: drop
+          mountPath: {{ .Values.hostPath.drop }}
+        - name: archive
+          mountPath: {{ .Values.hostPath.archive }}
+        - name: data
+          mountPath: {{ .Values.hostPath.data }}
+        - name: app
+          mountPath: /app
+          readOnly: true
+        {{- if .Values.healthCheck.enabled }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.healthCheck.path }}
+            port: http
+          initialDelaySeconds: {{ .Values.healthCheck.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthCheck.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthCheck.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthCheck.failureThreshold }}
+        {{- end }}
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+      volumes:
+      - name: drop
+        hostPath:
+          path: {{ .Values.hostPath.drop }}
+          type: Directory
+      - name: archive
+        hostPath:
+          path: {{ .Values.hostPath.archive }}
+          type: Directory
+      - name: data
+        hostPath:
+          path: {{ .Values.hostPath.data }}
+          type: Directory
+      - name: app
+        hostPath:
+          path: /opt/nz-ingest/app
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nz-ingest.fullname" . }}
+  labels:
+    {{- include "nz-ingest.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "nz-ingest.selectorLabels" . | nindent 4 }}
