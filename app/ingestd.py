@@ -79,7 +79,7 @@ CODE_FILES = ('ingestd.py', 'mediacheck.py', 'store.py')
 # the top level, and never to the drop folder.
 EXCLUDE = set(x for x in os.environ.get(
     'NZ_EXCLUDE',
-    'photos,_audit,_ingest,_quarantine,_duplicates,_conflicts,_undated,'
+    'Documents,Favorites,photos,_audit,_ingest,_quarantine,_duplicates,_conflicts,_undated,'
     '.ix-apps,ix-applications').split(',') if x)
 
 DAMAGED = ('ZERO', 'TRUNCATED', 'HEADER_BAD', 'NO_MOOV')
